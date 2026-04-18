@@ -1,0 +1,546 @@
+import React from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Orbs, Toast, useToast, getApiUrl, renderMarkdown } from './Shared'
+
+/* ═══════ RECRUITER DASHBOARD ═══════ */
+export default function RecruiterDashboard() {
+  const navigate = useNavigate()
+  const { toast, showToast } = useToast()
+  const [activeTab, setActiveTab] = React.useState('applicants')
+
+  const user = React.useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+  }, [])
+
+  React.useEffect(() => {
+    if (!user.id || user.role !== 'recruiter') navigate('/')
+  }, [user.id, user.role, navigate])
+
+  const displayName = user.company_name || user.name || 'Company'
+  const recruiterName = user.name || 'Recruiter'
+  const recruiterEmail = user.email || ''
+  const rolesHiring = user.roles_hiring || ''
+  const status = user.status || 'approved'
+
+  function signOut() {
+    localStorage.removeItem('user')
+    localStorage.removeItem('preplace_user') 
+    navigate('/')
+  }
+
+  const tabs = [
+    { id: 'applicants', label: '👥 Applicants' },
+    { id: 'post', label: '➕ Post a Job' },
+    { id: 'listings', label: '📋 My Listings' },
+  ]
+
+  return (
+    <>
+      <Orbs />
+      <header style={{ position: 'sticky', top: 0, zIndex: 50, background: 'rgba(6,8,15,0.8)', backdropFilter: 'blur(20px)', borderBottom: '1px solid var(--border)', padding: '1rem 2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="logo" onClick={() => navigate('/')} style={{ cursor: 'pointer', background: 'linear-gradient(135deg,#4d9fff,#0057ff)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>PRE<span>PLACE</span></div>
+        <button className="signout-btn" onClick={signOut}>Sign Out</button>
+      </header>
+
+      <div className="page">
+        {/* Profile Card */}
+        <div className="profile-card" style={{ borderImage: 'none' }}>
+          <div style={{ width: 72, height: 72, borderRadius: '50%', flexShrink: 0, background: 'linear-gradient(135deg,rgba(77,159,255,0.2),rgba(0,87,255,0.2))', border: '2px solid rgba(77,159,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem' }}>🏢</div>
+          <div className="profile-info">
+            <div className="profile-name">{displayName}</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '0.1rem' }}>{recruiterName} · {recruiterEmail}</div>
+            <div className="profile-tags" style={{ marginTop: '0.5rem' }}>
+              <span className="ptag" style={{ background: 'rgba(77,159,255,0.08)', borderColor: 'rgba(77,159,255,0.2)', color: 'var(--accent2, #4d9fff)' }}>Recruiter</span>
+              {rolesHiring && <span className="ptag">{rolesHiring}</span>}
+              <span className="ptag green">{status === 'approved' ? 'Approved' : 'Pending'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="tabs">
+          {tabs.map(t => (
+            <button key={t.id} className={`tab ${activeTab === t.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(t.id)} style={activeTab === t.id ? { background: 'rgba(77,159,255,0.1)', color: '#4d9fff' } : {}}>{t.label}</button>
+          ))}
+        </div>
+
+        {activeTab === 'applicants' && <ApplicantsPanel showToast={showToast} />}
+        {activeTab === 'post' && <PostJobPanel showToast={showToast} onPosted={() => setActiveTab('listings')} />}
+        {activeTab === 'listings' && <ListingsPanel showToast={showToast} userId={user.id} />}
+      </div>
+
+      <Toast toast={toast} />
+    </>
+  )
+}
+
+/* ═══════ APPLICANTS PANEL ═══════ */
+function ApplicantsPanel({ showToast }) {
+  const [applications, setApplications] = React.useState([])
+  const [statusFilter, setStatusFilter] = React.useState('')
+  const [search, setSearch] = React.useState('')
+  const [sortBy, setSortBy] = React.useState('match')
+  const [listings, setListings] = React.useState([])
+  const [selectedListing, setSelectedListing] = React.useState('')
+  const [modalApp, setModalApp] = React.useState(null)
+  const [loading, setLoading] = React.useState(true)
+
+  const user = React.useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+  }, [])
+
+  function loadListings() {
+    const apiUrl = getApiUrl()
+    if (!user.id) return
+    fetch(`${apiUrl}/job-listings?recruiter_id=${user.id}`)
+      .then(r => r.json())
+      .then(data => setListings(Array.isArray(data) ? data : []))
+      .catch(() => setListings([]))
+  }
+
+  function loadApplications() {
+    const apiUrl = getApiUrl()
+    if (!user.id) { setLoading(false); return }
+    const params = new URLSearchParams({ recruiter_id: String(user.id), sort_by: sortBy })
+    if (statusFilter) params.set('status', statusFilter)
+    if (search.trim()) params.set('q', search.trim())
+    if (selectedListing) params.set('listing_id', selectedListing)
+    setLoading(true)
+    fetch(`${apiUrl}/recruiter/applications?${params.toString()}`)
+      .then(r => r.json())
+      .then(data => { setApplications(Array.isArray(data) ? data : []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  React.useEffect(() => {
+    loadListings()
+  }, [user.id])
+
+  React.useEffect(() => {
+    loadApplications()
+  }, [user.id, statusFilter, selectedListing, sortBy])
+
+  async function updateStatus(applicationId, status) {
+    const apiUrl = getApiUrl()
+    const resp = await fetch(`${apiUrl}/applications/${applicationId}/status?recruiter_id=${user.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    showToast(`Status updated to ${status}.`, '#4d9fff')
+    loadApplications()
+  }
+
+  async function saveNote(applicationId, recruiter_note) {
+    const apiUrl = getApiUrl()
+    const resp = await fetch(`${apiUrl}/applications/${applicationId}/note?recruiter_id=${user.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recruiter_note }),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    showToast('Recruiter note saved.', 'var(--accent)')
+    loadApplications()
+  }
+
+  function scoreColor(s) { return s >= 80 ? 'var(--accent)' : s >= 65 ? '#f0b429' : 'var(--accent3)' }
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading applicants…</div></div></div>
+
+  return (
+    <div className="panel active">
+      <div className="job-filters" style={{ marginBottom: '1.2rem', display: 'flex', gap: '0.6rem' }}>
+        <select className="form-input" style={{ width: 180 }} value={selectedListing} onChange={e => setSelectedListing(e.target.value)}>
+          <option value="">All listings</option>
+          {listings.map(l => <option value={String(l.id)} key={l.id}>{l.role_title}</option>)}
+        </select>
+        <select className="form-input" style={{ width: 150 }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <option value="">All status</option>
+          <option value="saved">Saved</option>
+          <option value="applied">Applied</option>
+          <option value="reviewed">Reviewed</option>
+          <option value="shortlisted">Shortlisted</option>
+          <option value="rejected">Rejected</option>
+          <option value="withdrawn">Withdrawn</option>
+        </select>
+        <select className="form-input" style={{ width: 140 }} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="match">Sort by Match</option>
+          <option value="score">Sort by Score</option>
+          <option value="latest">Sort by Latest</option>
+        </select>
+        <input className="form-input" style={{ marginLeft: 'auto', width: 220, padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}
+          placeholder="Search applicant" value={search} onChange={e => setSearch(e.target.value)} />
+        <button className="apply-btn" onClick={loadApplications}>Go</button>
+      </div>
+
+      {applications.length === 0 ? (
+        <div className="history-empty">
+          <div className="history-empty-icon">🔍</div>
+          <div className="history-empty-title">No applications found</div>
+          <div className="history-empty-sub">Ask candidates to apply or relax filters.</div>
+        </div>
+      ) : (
+        <div className="jobs-list">
+          {applications.map(a => (
+            <div className="job-row" key={a.id} onClick={() => setModalApp(a)} style={{ cursor: 'pointer' }}>
+              <div className="job-logo">👤</div>
+              <div className="job-main">
+                <div className="job-role">{a.name}</div>
+                <div className="job-co">{a.email}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.2rem' }}>{a.job_title}</div>
+                {a.suggested_role && (
+                  <div style={{ marginTop: '0.3rem' }}>
+                    <span className="jtag" style={{ background: 'rgba(77,159,255,0.1)', borderColor: 'rgba(77,159,255,0.2)', color: '#4d9fff' }}>🎯 {a.suggested_role}</span>
+                    <span className="jtag" style={{ marginLeft: '0.35rem', borderColor: 'rgba(0,229,160,0.2)', color: 'var(--accent)' }}>{a.status}</span>
+                  </div>
+                )}
+              </div>
+              <div className="job-right">
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem' }}>
+                  <div className="job-match" style={{ color: scoreColor(a.score || 0) }}>{a.match || 0}%</div>
+                  <span style={{ fontSize: '0.58rem', color: 'var(--muted)', fontWeight: 600 }}>S:{a.score || '—'}</span>
+                </div>
+                <div className="job-bar"><div className="job-bar-fill" style={{ width: `${a.match || 0}%`, background: scoreColor(a.score || 0) }}></div></div>
+                <button className="apply-btn" onClick={e => { e.stopPropagation(); setModalApp(a) }}>View →</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Applicant Detail Modal */}
+      {modalApp && (
+        <div className="modal-overlay active" onClick={() => setModalApp(null)}>
+          <div className="modal applicant-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
+            <button className="close-btn" onClick={() => setModalApp(null)}>✕</button>
+            <div className="modal-header">
+              <div className="modal-icon applicant-icon">👤</div>
+              <div>
+                <div className="modal-title">{modalApp.name}</div>
+                <div className="modal-sub">{modalApp.email}</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.4rem' }}>Resume Score</div>
+                <div style={{ fontFamily: "'Syne', sans-serif", fontSize: '1.6rem', fontWeight: 800, color: scoreColor(modalApp.score || 0) }}>{modalApp.score || '—'} / 100</div>
+              </div>
+              {modalApp.suggested_role && (
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.4rem' }}>Suggested Role</div>
+                  <div style={{ fontFamily: "'Syne', sans-serif", fontSize: '1rem', fontWeight: 700, color: '#4d9fff', marginTop: '0.3rem' }}>🎯 {modalApp.suggested_role}</div>
+                </div>
+              )}
+            </div>
+            {modalApp.analysis && (
+              <div style={{ fontSize: '0.8rem', color: 'var(--muted)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto', background: 'rgba(255,255,255,0.02)', borderRadius: 10, padding: '1rem', border: '1px solid var(--border)' }}>
+                {modalApp.analysis}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.8rem', marginTop: '1.5rem' }}>
+              <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(0,229,160,0.1)', border: '1px solid rgba(0,229,160,0.25)', borderRadius: 10, color: 'var(--accent)', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => { updateStatus(modalApp.id, 'shortlisted'); setModalApp(null) }}>✅ Shortlist</button>
+              <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(77,159,255,0.08)', border: '1px solid rgba(77,159,255,0.2)', borderRadius: 10, color: '#4d9fff', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => { window.location.href = `mailto:${modalApp.email}`; setModalApp(null) }}>📧 Contact</button>
+              <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(255,92,135,0.08)', border: '1px solid rgba(255,92,135,0.2)', borderRadius: 10, color: 'var(--accent3)', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => { updateStatus(modalApp.id, 'rejected'); setModalApp(null) }}>✕ Reject</button>
+            </div>
+            <textarea className="form-input" placeholder="Recruiter note" defaultValue={modalApp.recruiter_note || ''} style={{ marginTop: '0.9rem', minHeight: 90, resize: 'vertical' }} id={`note-${modalApp.id}`} />
+            <div style={{ marginTop: '0.6rem', display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="apply-btn" onClick={() => saveNote(modalApp.id, document.getElementById(`note-${modalApp.id}`)?.value || '')}>Save Note</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ═══════ POST JOB PANEL ═══════ */
+function PostJobPanel({ showToast, onPosted }) {
+  const [form, setForm] = React.useState({
+    role_title: '', department: '', min_cgpa: '', ctc: '', location: '',
+    job_type: 'Internship', description: '', min_score: '', experience: 'Fresher (0 years)'
+  })
+  const [skills, setSkills] = React.useState([])
+  const [skillInput, setSkillInput] = React.useState('')
+  const [posting, setPosting] = React.useState(false)
+  const [preview, setPreview] = React.useState(false)
+
+  const user = React.useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+  }, [])
+
+  function update(field, val) { setForm(prev => ({ ...prev, [field]: val })) }
+
+  function addSkill() {
+    const v = skillInput.trim()
+    if (!v || skills.includes(v)) { setSkillInput(''); return }
+    setSkills(prev => [...prev, v])
+    setSkillInput('')
+  }
+
+  async function postJob() {
+    if (!form.role_title || !form.department || !form.ctc || !form.location) {
+      showToast('Please fill all required fields.', 'var(--accent3)')
+      return
+    }
+    setPosting(true)
+    const apiUrl = getApiUrl()
+    try {
+      const resp = await fetch(`${apiUrl}/job-listings?recruiter_id=${user.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, skills: skills.join(','), min_cgpa: parseFloat(form.min_cgpa) || 0, min_score: parseInt(form.min_score) || 0 })
+      })
+      const data = await resp.json()
+      if (data.error) { showToast(data.error, 'var(--accent3)'); setPosting(false); return }
+      showToast('✅ Job submitted for admin approval!', '#f0b429')
+      setForm({ role_title: '', department: '', min_cgpa: '', ctc: '', location: '', job_type: 'Internship', description: '', min_score: '', experience: 'Fresher (0 years)' })
+      setSkills([])
+      onPosted()
+    } catch {
+      showToast('Failed to post. Check backend.', 'var(--accent3)')
+    }
+    setPosting(false)
+  }
+
+  const inputStyle = { width: '100%', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', outline: 'none' }
+  const labelStyle = { fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.45rem', display: 'block' }
+
+  return (
+    <div className="panel active">
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 18, padding: '2rem 2.2rem', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: 'linear-gradient(90deg, #4d9fff, #0057ff)' }}></div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+          <div>
+            <label style={labelStyle}>Job Role / Title</label>
+            <input style={inputStyle} placeholder="e.g. SDE Intern" value={form.role_title} onChange={e => update('role_title', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Department</label>
+            <select style={{ ...inputStyle, cursor: 'pointer' }} value={form.department} onChange={e => update('department', e.target.value)}>
+              <option value="">Select department</option>
+              <option>Engineering</option>
+              <option>Data Science</option>
+              <option>Product</option>
+              <option>Design</option>
+              <option>Marketing</option>
+              <option>Operations</option>
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Minimum CGPA</label>
+            <input style={inputStyle} type="number" min="0" max="10" step="0.1" placeholder="e.g. 7.5" value={form.min_cgpa} onChange={e => update('min_cgpa', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>CTC / Stipend</label>
+            <input style={inputStyle} placeholder="e.g. ₹60,000/mo" value={form.ctc} onChange={e => update('ctc', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Location</label>
+            <input style={inputStyle} placeholder="e.g. Bangalore / Remote" value={form.location} onChange={e => update('location', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Job Type</label>
+            <select style={{ ...inputStyle, cursor: 'pointer' }} value={form.job_type} onChange={e => update('job_type', e.target.value)}>
+              <option>Internship</option>
+              <option>Full-Time</option>
+              <option>Part-Time</option>
+              <option>Contract</option>
+            </select>
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={labelStyle}>Job Description</label>
+            <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 90 }} placeholder="Describe the role, responsibilities…" value={form.description} onChange={e => update('description', e.target.value)} />
+            <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>Markdown supported</span>
+              <button className="apply-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide Preview' : 'Preview'}</button>
+            </div>
+            {preview && (
+              <div style={{ marginTop: '0.6rem', border: '1px solid var(--border)', borderRadius: 10, padding: '0.85rem', background: 'rgba(255,255,255,0.02)' }} dangerouslySetInnerHTML={{ __html: renderMarkdown(form.description || '*No content*') }} />
+            )}
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={labelStyle}>Required Skills</label>
+            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.5rem' }}>
+              <input style={{ ...inputStyle, flex: 1 }} placeholder="Add a skill and press Enter" value={skillInput}
+                onChange={e => setSkillInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSkill() } }} />
+              <button className="apply-btn" style={{ padding: '0.65rem 1rem', fontSize: '0.82rem', fontWeight: 700 }} onClick={addSkill}>+ Add</button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.5rem' }}>
+              {skills.map(s => (
+                <span key={s} onClick={() => setSkills(prev => prev.filter(x => x !== s))}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', fontWeight: 600, padding: '0.25rem 0.65rem', borderRadius: 100, background: 'rgba(77,159,255,0.1)', border: '1px solid rgba(77,159,255,0.2)', color: '#4d9fff', cursor: 'pointer' }}>
+                  {s} <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>✕</span>
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Min. Resume Score</label>
+            <input style={inputStyle} type="number" min="0" max="100" placeholder="e.g. 60" value={form.min_score} onChange={e => update('min_score', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Experience Required</label>
+            <select style={{ ...inputStyle, cursor: 'pointer' }} value={form.experience} onChange={e => update('experience', e.target.value)}>
+              <option>Fresher (0 years)</option>
+              <option>0–1 years</option>
+              <option>1–2 years</option>
+              <option>2+ years</option>
+            </select>
+          </div>
+        </div>
+
+        <button className="analyze-btn" onClick={postJob} disabled={posting}
+          style={{ background: 'linear-gradient(135deg, #4d9fff, #0057ff)', color: '#fff' }}>
+          {posting ? 'Posting…' : '📤 Post Job Listing'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ═══════ MY LISTINGS PANEL ═══════ */
+function ListingsPanel({ showToast, userId }) {
+  const [listings, setListings] = React.useState([])
+  const [loading, setLoading] = React.useState(true)
+  const [editing, setEditing] = React.useState(null)
+  const [editForm, setEditForm] = React.useState(null)
+
+  function fetchListings() {
+    const apiUrl = getApiUrl()
+    fetch(`${apiUrl}/job-listings?recruiter_id=${userId}`)
+      .then(r => r.json())
+      .then(data => { setListings(Array.isArray(data) ? data : []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  React.useEffect(() => { fetchListings() }, [userId])
+
+  async function toggleStatus(id) {
+    const apiUrl = getApiUrl()
+    await fetch(`${apiUrl}/job-listings/${id}/toggle`, { method: 'PATCH' })
+    showToast('Listing status updated.', '#4d9fff')
+    fetchListings()
+  }
+
+  async function deleteListing(id) {
+    const apiUrl = getApiUrl()
+    const resp = await fetch(`${apiUrl}/job-listings/${id}?recruiter_id=${userId}`, { method: 'DELETE' })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    showToast('Listing deleted.', '#f0b429')
+    fetchListings()
+  }
+
+  async function saveEdit() {
+    const apiUrl = getApiUrl()
+    const resp = await fetch(`${apiUrl}/job-listings/${editing}?recruiter_id=${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editForm),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    showToast('Listing updated and submitted for review.', '#4d9fff')
+    setEditing(null)
+    setEditForm(null)
+    fetchListings()
+  }
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading listings…</div></div></div>
+
+  if (!listings.length) {
+    return (
+      <div className="panel active">
+        <div className="history-empty">
+          <div className="history-empty-icon">📋</div>
+          <div className="history-empty-title">No job listings yet</div>
+          <div className="history-empty-sub">Post your first job to see it here.</div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="panel active">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {listings.map(l => (
+          <div key={l.id} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '1.3rem 1.5rem', position: 'relative', overflow: 'hidden', transition: 'border-color 0.25s, transform 0.25s', borderLeft: '3px solid #4d9fff' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+              <div>
+                <div style={{ fontFamily: "'Syne', sans-serif", fontSize: '1rem', fontWeight: 800, marginBottom: '0.2rem' }}>{l.role_title}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{l.department} · {l.job_type} · {l.location} · {l.ctc}</div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem', flexShrink: 0 }}>
+                <span style={{
+                  fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase',
+                  padding: '0.25rem 0.7rem', borderRadius: 100,
+                  background: l.status === 'active' ? 'rgba(0,229,160,0.1)' : l.status === 'pending_approval' ? 'rgba(240,180,41,0.1)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${l.status === 'active' ? 'rgba(0,229,160,0.2)' : l.status === 'pending_approval' ? 'rgba(240,180,41,0.25)' : 'var(--border)'}`,
+                  color: l.status === 'active' ? 'var(--accent)' : l.status === 'pending_approval' ? '#f0b429' : l.status === 'rejected' ? 'var(--accent3)' : 'var(--muted)'
+                }}>{l.status === 'active' ? '🟢 Active' : l.status === 'pending_approval' ? '⏳ Pending Approval' : l.status === 'rejected' ? '✕ Rejected' : '⚫ Closed'}</span>
+              </div>
+            </div>
+            {l.skills && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.8rem' }}>
+                {l.skills.split(',').map(s => s.trim()).filter(Boolean).map(s => (
+                  <span key={s} className="jtag">{s}</span>
+                ))}
+                <span className="jtag">Min CGPA: {l.min_cgpa}</span>
+                <span className="jtag">Min Score: {l.min_score}</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.9rem' }}>
+              {l.status === 'pending_approval' ? (
+                <span style={{ fontSize: '0.72rem', color: '#f0b429', fontWeight: 600 }}>Awaiting admin review…</span>
+              ) : l.status === 'rejected' ? (
+                <span style={{ fontSize: '0.72rem', color: 'var(--accent3)', fontWeight: 600 }}>Admin rejected this listing</span>
+              ) : (
+                <button className="apply-btn" onClick={() => toggleStatus(l.id)}>
+                  {l.status === 'active' ? 'Close Listing' : 'Reopen'}
+                </button>
+              )}
+              <button className="apply-btn" onClick={() => { setEditing(l.id); setEditForm({ ...l }) }}>Edit</button>
+              <button className="apply-btn" style={{ color: 'var(--accent3)' }} onClick={() => deleteListing(l.id)}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {editing && editForm && (
+        <div className="modal-overlay active" onClick={() => setEditing(null)}>
+          <div className="modal" style={{ maxWidth: 650 }} onClick={e => e.stopPropagation()}>
+            <button className="close-btn" onClick={() => setEditing(null)}>✕</button>
+            <div className="modal-title" style={{ marginBottom: '0.7rem' }}>Edit Listing</div>
+            <input className="form-input" value={editForm.role_title || ''} onChange={e => setEditForm(prev => ({ ...prev, role_title: e.target.value }))} placeholder="Role title" />
+            <textarea className="form-input" style={{ marginTop: '0.6rem', minHeight: 150 }} value={editForm.description || ''} onChange={e => setEditForm(prev => ({ ...prev, description: e.target.value }))} placeholder="Markdown description" />
+            <div style={{ marginTop: '0.6rem', border: '1px solid var(--border)', borderRadius: 10, padding: '0.85rem', maxHeight: 190, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: renderMarkdown(editForm.description || '') }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.8rem', gap: '0.5rem' }}>
+              <button className="apply-btn" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="apply-btn" onClick={saveEdit}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
