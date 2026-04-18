@@ -7,11 +7,12 @@ import uuid
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from database import Base, SessionLocal, engine
 import models
 from matching import compute_job_match, normalize_app_status, sanitize_markdown
+from security import create_auth_token, hash_password, verify_auth_token, verify_password
 from schemas import (
     ApplicationCreate,
     ApplicationStatusUpdate,
@@ -67,6 +68,17 @@ def ensure_schema_updates() -> None:
             CONSTRAINT unique_application UNIQUE(applicant_id, job_listing_id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id SERIAL PRIMARY KEY,
+            actor_id INTEGER NULL REFERENCES users(id),
+            action VARCHAR,
+            target_type VARCHAR DEFAULT '',
+            target_id INTEGER NULL,
+            detail TEXT DEFAULT '',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
     ]
     with engine.begin() as conn:
         for stmt in ddl:
@@ -84,10 +96,13 @@ def seed_admin() -> None:
             admin_user = models.UserDB(
                 name="PREPLACE Admin",
                 email="admin@preplace.smvdu",
-                password="admin@123",
+                password=hash_password("admin@123"),
                 role="admin",
             )
             db.add(admin_user)
+            db.commit()
+        elif not str(admin.password).startswith("pbkdf2$"):
+            admin.password = hash_password("admin@123")
             db.commit()
     finally:
         db.close()
@@ -220,6 +235,18 @@ def ensure_recruiter_owns_listing(db, recruiter_id: int, listing_id: int):
     return listing
 
 
+def log_audit(db, action: str, actor_id: int | None = None, target_type: str = "", target_id: int | None = None, detail: str = ""):
+    entry = models.AuditLog(
+        actor_id=actor_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail[:1500] if detail else "",
+    )
+    db.add(entry)
+    db.commit()
+
+
 # ===================== AUTH =====================
 @app.post("/register")
 def register_user(user: UserCreate):
@@ -229,10 +256,11 @@ def register_user(user: UserCreate):
         if existing:
             return {"error": "Email already registered"}
 
-        new_user = models.UserDB(name=user.name, email=user.email, password=user.password, role=user.role)
+        new_user = models.UserDB(name=user.name, email=user.email, password=hash_password(user.password), role=user.role)
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
+        log_audit(db, "user.register", actor_id=new_user.id, target_type="user", target_id=new_user.id, detail=f"role={new_user.role}")
         return {"message": "User saved in database"}
     finally:
         db.close()
@@ -246,7 +274,7 @@ def register_recruiter(data: RecruiterRegister):
         if existing:
             return {"error": "Email already registered"}
 
-        new_user = models.UserDB(name=data.name, email=data.email, password=data.password, role="recruiter")
+        new_user = models.UserDB(name=data.name, email=data.email, password=hash_password(data.password), role="recruiter")
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
@@ -259,6 +287,7 @@ def register_recruiter(data: RecruiterRegister):
         )
         db.add(profile)
         db.commit()
+        log_audit(db, "recruiter.register", actor_id=new_user.id, target_type="recruiter_profile", target_id=profile.id, detail=f"company={profile.company_name}")
         return {"message": "Recruiter registered successfully. Awaiting admin approval."}
     finally:
         db.close()
@@ -271,11 +300,16 @@ def login(user: UserLogin):
         existing_user = db.query(models.UserDB).filter(models.UserDB.email == user.email).first()
         if not existing_user:
             return {"error": "User not found"}
-        if existing_user.password != user.password:
+        if not verify_password(user.password, existing_user.password):
             return {"error": "Incorrect password"}
+
+        if not str(existing_user.password).startswith("pbkdf2$"):
+            existing_user.password = hash_password(user.password)
+            db.commit()
 
         result = {
             "message": "Login successful",
+            "auth_token": create_auth_token(existing_user.id, existing_user.role),
             "user": {
                 "id": existing_user.id,
                 "name": existing_user.name,
@@ -291,9 +325,18 @@ def login(user: UserLogin):
                 result["user"]["roles_hiring"] = profile.roles_hiring
                 result["user"]["status"] = profile.status
 
+        log_audit(db, "auth.login", actor_id=existing_user.id, target_type="user", target_id=existing_user.id, detail=f"role={existing_user.role}")
         return result
     finally:
         db.close()
+
+
+@app.get("/auth/validate")
+def validate_token(token: str):
+    payload = verify_auth_token(token)
+    if not payload:
+        return {"valid": False}
+    return {"valid": True, "payload": payload}
 
 
 # ===================== RESUMES =====================
@@ -343,6 +386,7 @@ def upload_resume(user_id: int, file: UploadFile = File(...)):
             existing_resume.score = final_score
             existing_resume.updated_at = datetime.utcnow()
             db.commit()
+            log_audit(db, "resume.activate_cached", actor_id=user_id, target_type="resume", target_id=existing_resume.id)
 
             return {
                 "message": "Using cached result",
@@ -393,6 +437,7 @@ def upload_resume(user_id: int, file: UploadFile = File(...)):
         db.refresh(resume)
 
         upsert_resume_vector(db, resume)
+        log_audit(db, "resume.upload", actor_id=user_id, target_type="resume", target_id=resume.id, detail=f"file={filename}")
 
         return {
             "message": "Resume uploaded",
@@ -448,6 +493,7 @@ def activate_resume(resume_id: int, user_id: int):
         resume.is_active = True
         resume.updated_at = datetime.utcnow()
         db.commit()
+        log_audit(db, "resume.activate", actor_id=user_id, target_type="resume", target_id=resume.id)
         return {"message": "Active resume updated"}
     finally:
         db.close()
@@ -470,6 +516,7 @@ def delete_resume(resume_id: int, user_id: int):
 
         vector_store.delete_resume(resume.id)
         db.query(models.Application).filter(models.Application.applicant_id == user_id).delete()
+        deleted_resume_id = resume.id
         db.delete(resume)
         db.commit()
 
@@ -484,6 +531,7 @@ def delete_resume(resume_id: int, user_id: int):
                 latest.is_active = True
                 db.commit()
 
+        log_audit(db, "resume.delete", actor_id=user_id, target_type="resume", target_id=deleted_resume_id)
         return {"message": "Resume deleted"}
     finally:
         db.close()
@@ -521,6 +569,7 @@ def create_job_listing(recruiter_id: int, job: JobListingCreate):
         db.refresh(listing)
 
         upsert_job_vector(db, listing)
+        log_audit(db, "job.create", actor_id=recruiter_id, target_type="job_listing", target_id=listing.id, detail=f"status={listing.status}")
         return {"message": "Job listing submitted for admin approval", "id": listing.id}
     finally:
         db.close()
@@ -596,6 +645,7 @@ def update_job_listing(listing_id: int, recruiter_id: int, payload: JobListingUp
         db.commit()
         db.refresh(listing)
         upsert_job_vector(db, listing)
+        log_audit(db, "job.update", actor_id=recruiter_id, target_type="job_listing", target_id=listing.id, detail=f"status={listing.status}")
         return {"message": "Job listing updated", "status": listing.status}
     finally:
         db.close()
@@ -608,8 +658,10 @@ def delete_job_listing(listing_id: int, recruiter_id: int):
         listing = ensure_recruiter_owns_listing(db, recruiter_id, listing_id)
         vector_store.delete_job(listing.id)
         db.query(models.Application).filter(models.Application.job_listing_id == listing.id).delete()
+        deleted_listing_id = listing.id
         db.delete(listing)
         db.commit()
+        log_audit(db, "job.delete", actor_id=recruiter_id, target_type="job_listing", target_id=deleted_listing_id)
         return {"message": "Job listing deleted"}
     finally:
         db.close()
@@ -628,6 +680,7 @@ def toggle_job_listing(listing_id: int):
         listing.updated_at = datetime.utcnow()
         db.commit()
         upsert_job_vector(db, listing)
+        log_audit(db, "job.toggle", actor_id=listing.recruiter_id, target_type="job_listing", target_id=listing.id, detail=f"status={listing.status}")
         return {"message": "Status updated", "status": listing.status}
     finally:
         db.close()
@@ -832,6 +885,14 @@ def create_or_update_application(user_id: int, payload: ApplicationCreate):
 
         db.commit()
         db.refresh(app_record)
+        log_audit(
+            db,
+            "application.update",
+            actor_id=user_id,
+            target_type="application",
+            target_id=app_record.id,
+            detail=f"status={app_record.status};job={payload.job_listing_id}",
+        )
         return {"message": "Application updated", "application_id": app_record.id, "status": app_record.status}
     finally:
         db.close()
@@ -900,6 +961,7 @@ def withdraw_application(application_id: int, user_id: int):
         record.status = "withdrawn"
         record.updated_at = datetime.utcnow()
         db.commit()
+        log_audit(db, "application.withdraw", actor_id=user_id, target_type="application", target_id=record.id)
         return {"message": "Application withdrawn"}
     finally:
         db.close()
@@ -1018,6 +1080,14 @@ def recruiter_update_application_status(application_id: int, recruiter_id: int, 
         record.last_status_updated_by = recruiter_id
         record.updated_at = datetime.utcnow()
         db.commit()
+        log_audit(
+            db,
+            "application.status_update",
+            actor_id=recruiter_id,
+            target_type="application",
+            target_id=record.id,
+            detail=f"status={status}",
+        )
         return {"message": "Application status updated", "status": status}
     finally:
         db.close()
@@ -1038,6 +1108,7 @@ def recruiter_update_note(application_id: int, recruiter_id: int, payload: Recru
         record.recruiter_note = (payload.recruiter_note or "").strip()[:1000]
         record.updated_at = datetime.utcnow()
         db.commit()
+        log_audit(db, "application.note_update", actor_id=recruiter_id, target_type="application", target_id=record.id)
         return {"message": "Recruiter note updated"}
     finally:
         db.close()
@@ -1129,6 +1200,7 @@ def admin_update_recruiter_status(user_id: int, status: str):
             return {"error": "Recruiter profile not found"}
         profile.status = status
         db.commit()
+        log_audit(db, "admin.recruiter_status", actor_id=1, target_type="recruiter_profile", target_id=profile.id, detail=f"status={status}")
         return {"message": f"Recruiter status updated to {status}"}
     finally:
         db.close()
@@ -1148,6 +1220,7 @@ def admin_delete_recruiter(user_id: int):
         db.query(models.JobListing).filter(models.JobListing.recruiter_id == user_id).delete()
         db.query(models.UserDB).filter(models.UserDB.id == user_id).delete()
         db.commit()
+        log_audit(db, "admin.recruiter_delete", actor_id=1, target_type="user", target_id=user_id)
         return {"message": "Recruiter deleted"}
     finally:
         db.close()
@@ -1200,6 +1273,7 @@ def admin_update_job_status(listing_id: int, status: str):
         listing.updated_at = datetime.utcnow()
         db.commit()
         upsert_job_vector(db, listing)
+        log_audit(db, "admin.job_status", actor_id=1, target_type="job_listing", target_id=listing.id, detail=f"status={status}")
         return {"message": f"Job listing status updated to {status}"}
     finally:
         db.close()
@@ -1216,6 +1290,16 @@ def admin_stats():
         total_listings = db.query(models.JobListing).count()
         pending_jobs = db.query(models.JobListing).filter(models.JobListing.status == "pending_approval").count()
         total_applications = db.query(models.Application).count()
+        pipeline = (
+            db.query(models.Application.status, func.count(models.Application.id))
+            .group_by(models.Application.status)
+            .all()
+        )
+        dept_counts = (
+            db.query(models.JobListing.department, func.count(models.JobListing.id))
+            .group_by(models.JobListing.department)
+            .all()
+        )
 
         return {
             "total_applicants": total_applicants,
@@ -1226,6 +1310,95 @@ def admin_stats():
             "pending_jobs": pending_jobs,
             "total_applications": total_applications,
             "vector_enabled": vector_store.enabled,
+            "pipeline_breakdown": {status: count for status, count in pipeline},
+            "department_breakdown": {dept or "Unspecified": count for dept, count in dept_counts},
         }
+    finally:
+        db.close()
+
+
+@app.get("/analytics/recruiter-overview")
+def recruiter_analytics(recruiter_id: int):
+    db = SessionLocal()
+    try:
+        listings = db.query(models.JobListing).filter(models.JobListing.recruiter_id == recruiter_id).all()
+        listing_ids = [l.id for l in listings]
+        if not listing_ids:
+            return {
+                "total_listings": 0,
+                "active_listings": 0,
+                "total_applications": 0,
+                "pipeline_breakdown": {},
+                "applications_per_listing": [],
+            }
+
+        apps = db.query(models.Application).filter(models.Application.job_listing_id.in_(listing_ids)).all()
+        breakdown = {}
+        for app_row in apps:
+            breakdown[app_row.status] = breakdown.get(app_row.status, 0) + 1
+
+        per_listing = []
+        for listing in listings:
+            cnt = sum(1 for a in apps if a.job_listing_id == listing.id)
+            per_listing.append({"job_listing_id": listing.id, "role_title": listing.role_title, "applications": cnt, "status": listing.status})
+        per_listing.sort(key=lambda x: x["applications"], reverse=True)
+
+        return {
+            "total_listings": len(listings),
+            "active_listings": sum(1 for l in listings if l.status == "active"),
+            "total_applications": len(apps),
+            "pipeline_breakdown": breakdown,
+            "applications_per_listing": per_listing,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/analytics/applicant-overview")
+def applicant_analytics(user_id: int):
+    db = SessionLocal()
+    try:
+        apps = db.query(models.Application).filter(models.Application.applicant_id == user_id).all()
+        resumes = db.query(models.Resume).filter(models.Resume.user_id == user_id).all()
+        breakdown = {}
+        for app_row in apps:
+            breakdown[app_row.status] = breakdown.get(app_row.status, 0) + 1
+
+        avg_score = 0
+        if resumes:
+            avg_score = round(sum((r.score or 0) for r in resumes) / len(resumes), 2)
+
+        return {
+            "total_resumes": len(resumes),
+            "avg_resume_score": avg_score,
+            "total_applications": len(apps),
+            "application_breakdown": breakdown,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/admin/audit-logs")
+def get_admin_audit_logs(action: str = "", actor_id: int | None = None, limit: int = Query(100, ge=1, le=500)):
+    db = SessionLocal()
+    try:
+        query = db.query(models.AuditLog)
+        if action:
+            query = query.filter(models.AuditLog.action == action)
+        if actor_id is not None:
+            query = query.filter(models.AuditLog.actor_id == actor_id)
+        logs = query.order_by(models.AuditLog.id.desc()).limit(limit).all()
+        return [
+            {
+                "id": log.id,
+                "actor_id": log.actor_id,
+                "action": log.action,
+                "target_type": log.target_type,
+                "target_id": log.target_id,
+                "detail": log.detail,
+                "created_at": to_iso(log.created_at),
+            }
+            for log in logs
+        ]
     finally:
         db.close()

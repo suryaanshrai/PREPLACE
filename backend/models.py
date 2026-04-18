@@ -82,3 +82,15 @@ class Application(Base):
     __table_args__ = (
         UniqueConstraint("applicant_id", "job_listing_id", name="unique_application"),
     )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    action = Column(String)
+    target_type = Column(String, default="")
+    target_id = Column(Integer, nullable=True)
+    detail = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

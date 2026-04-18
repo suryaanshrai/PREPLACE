@@ -32,6 +32,7 @@ export default function RecruiterDashboard() {
     { id: 'applicants', label: '👥 Applicants' },
     { id: 'post', label: '➕ Post a Job' },
     { id: 'listings', label: '📋 My Listings' },
+    { id: 'analytics', label: '📊 Analytics' },
   ]
 
   return (
@@ -68,10 +69,83 @@ export default function RecruiterDashboard() {
         {activeTab === 'applicants' && <ApplicantsPanel showToast={showToast} />}
         {activeTab === 'post' && <PostJobPanel showToast={showToast} onPosted={() => setActiveTab('listings')} />}
         {activeTab === 'listings' && <ListingsPanel showToast={showToast} userId={user.id} />}
+        {activeTab === 'analytics' && <RecruiterAnalyticsPanel userId={user.id} />}
       </div>
 
       <Toast toast={toast} />
     </>
+  )
+}
+
+function RecruiterAnalyticsPanel({ userId }) {
+  const [loading, setLoading] = React.useState(true)
+  const [analytics, setAnalytics] = React.useState(null)
+
+  React.useEffect(() => {
+    const apiUrl = getApiUrl()
+    if (!userId) { setLoading(false); return }
+    fetch(`${apiUrl}/analytics/recruiter-overview?recruiter_id=${userId}`)
+      .then(r => r.json())
+      .then(data => { setAnalytics(data || null); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [userId])
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading analytics…</div></div></div>
+  if (!analytics) return <div className="panel active"><div className="history-empty"><div className="history-empty-title">No analytics available</div></div></div>
+
+  const pipeline = analytics.pipeline_breakdown || {}
+  const perListing = analytics.applications_per_listing || []
+
+  return (
+    <div className="panel active">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: '0.9rem' }}>
+        <MetricCard label="Total Listings" value={analytics.total_listings || 0} color="#4d9fff" />
+        <MetricCard label="Active Listings" value={analytics.active_listings || 0} color="var(--accent)" />
+        <MetricCard label="Total Applications" value={analytics.total_applications || 0} color="#c8960c" />
+      </div>
+
+      <div style={{ marginTop: '1rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: 14, background: 'var(--surface)' }}>
+        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem' }}>Pipeline Breakdown</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+          {Object.keys(pipeline).length === 0 && <span className="jtag">No applications yet</span>}
+          {Object.entries(pipeline).map(([status, count]) => (
+            <span className="jtag" key={status}>{status}: {count}</span>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginTop: '1rem' }}>
+        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.55rem' }}>Applications Per Listing</div>
+        {perListing.length === 0 ? (
+          <div className="history-empty"><div className="history-empty-sub">No listing analytics yet.</div></div>
+        ) : (
+          <div className="jobs-list">
+            {perListing.map((row) => (
+              <div className="job-row" key={row.job_listing_id}>
+                <div className="job-logo">💼</div>
+                <div className="job-main">
+                  <div className="job-role">{row.role_title}</div>
+                  <div className="job-co">status: {row.status}</div>
+                </div>
+                <div className="job-right">
+                  <div className="job-match" style={{ color: '#4d9fff' }}>{row.applications}</div>
+                  <div className="job-ctc">applications</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({ label, value, color }) {
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '1rem 1.1rem' }}>
+      <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted)', fontWeight: 700 }}>{label}</div>
+      <div style={{ marginTop: '0.3rem', fontFamily: "'Syne', sans-serif", fontSize: '1.6rem', fontWeight: 800, color }}>{value}</div>
+    </div>
   )
 }
 

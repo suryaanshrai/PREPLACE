@@ -10,6 +10,9 @@ PREPLACE is a role-based hiring platform with applicant resume analysis, recruit
 - Candidate application workflow: save/apply/withdraw + status timeline.
 - Recruiter pipeline controls: update candidate status and add recruiter notes.
 - Search/filter/sort support for job and applicant workflows.
+- Recruiter/admin analytics endpoints and dashboard views.
+- Admin audit logs for lifecycle traceability.
+- Auth hardening: password hashing with legacy migration and signed auth token validation.
 
 ## Local Setup
 

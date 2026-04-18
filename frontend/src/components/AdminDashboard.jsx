@@ -33,6 +33,7 @@ export default function AdminDashboard() {
     { id: 'recruiters', label: '🏢 Recruiters' },
     { id: 'jobs', label: '📋 Job Listings' },
     { id: 'applicants', label: '🎓 Applicants' },
+    { id: 'audit', label: '🧾 Audit Logs' },
   ]
 
   return (
@@ -80,6 +81,7 @@ export default function AdminDashboard() {
         {activeTab === 'recruiters' && <RecruitersPanel showToast={showToast} onUpdate={refreshStats} />}
         {activeTab === 'jobs' && <JobListingsPanel showToast={showToast} onUpdate={refreshStats} />}
         {activeTab === 'applicants' && <ApplicantsPanel showToast={showToast} />}
+        {activeTab === 'audit' && <AuditLogsPanel />}
       </div>
 
       <Toast toast={toast} />
@@ -122,6 +124,75 @@ function OverviewPanel({ stats }) {
           </div>
         ))}
       </div>
+
+      <div style={{ marginTop: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.9rem' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '0.9rem' }}>
+          <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted)', fontWeight: 700, marginBottom: '0.45rem' }}>Pipeline Breakdown</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+            {Object.entries(stats.pipeline_breakdown || {}).length === 0 && <span className="jtag">No data</span>}
+            {Object.entries(stats.pipeline_breakdown || {}).map(([k, v]) => <span className="jtag" key={k}>{k}: {v}</span>)}
+          </div>
+        </div>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '0.9rem' }}>
+          <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted)', fontWeight: 700, marginBottom: '0.45rem' }}>Department Breakdown</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+            {Object.entries(stats.department_breakdown || {}).length === 0 && <span className="jtag">No data</span>}
+            {Object.entries(stats.department_breakdown || {}).map(([k, v]) => <span className="jtag" key={k}>{k}: {v}</span>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AuditLogsPanel() {
+  const [logs, setLogs] = React.useState([])
+  const [loading, setLoading] = React.useState(true)
+  const [action, setAction] = React.useState('')
+
+  function loadLogs(nextAction = action) {
+    const apiUrl = getApiUrl()
+    const params = new URLSearchParams({ limit: '120' })
+    if (nextAction.trim()) params.set('action', nextAction.trim())
+    setLoading(true)
+    fetch(`${apiUrl}/admin/audit-logs?${params.toString()}`)
+      .then(r => r.json())
+      .then(data => { setLogs(Array.isArray(data) ? data : []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  React.useEffect(() => { loadLogs() }, [])
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading audit logs…</div></div></div>
+
+  return (
+    <div className="panel active">
+      <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.9rem' }}>
+        <input className="form-input" placeholder="Filter by action, e.g. application.update" value={action} onChange={e => setAction(e.target.value)} />
+        <button className="apply-btn" onClick={() => loadLogs(action)}>Search</button>
+      </div>
+      {!logs.length ? (
+        <div className="history-empty">
+          <div className="history-empty-icon">🧾</div>
+          <div className="history-empty-title">No audit logs found</div>
+        </div>
+      ) : (
+        <div className="jobs-list">
+          {logs.map((log) => (
+            <div className="job-row" key={log.id}>
+              <div className="job-logo">🧾</div>
+              <div className="job-main">
+                <div className="job-role">{log.action}</div>
+                <div className="job-co">actor: {log.actor_id ?? 'system'} · target: {log.target_type || '-'} #{log.target_id ?? '-'}</div>
+                {log.detail && <div style={{ marginTop: '0.25rem', fontSize: '0.74rem', color: '#4d9fff' }}>{log.detail}</div>}
+              </div>
+              <div className="job-right">
+                <div className="job-ctc" style={{ minWidth: 190 }}>{log.created_at ? new Date(log.created_at).toLocaleString() : '-'}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
