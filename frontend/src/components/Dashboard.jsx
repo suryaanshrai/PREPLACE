@@ -1,6 +1,6 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Orbs, NirfBar, Toast, useToast, getApiUrl, getScoreColor, getGrade, parseAnalysis, renderMarkdown } from './Shared'
+import { Orbs, NirfBar, Toast, useToast, getApiUrl, getScoreColor, getGrade, parseAnalysis } from './Shared'
 
 /* ═══════ CONSTANTS ═══════ */
 const LOADER_STEPS = [
@@ -61,11 +61,40 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
   const [result, setResult] = React.useState(null)
   const [scoreAnimVal, setScoreAnimVal] = React.useState(0)
   const [dragging, setDragging] = React.useState(false)
+  const [scoringMode, setScoringMode] = React.useState('default')
+  const [templates, setTemplates] = React.useState([])
+  const [selectedTemplateId, setSelectedTemplateId] = React.useState('')
+  const [isDropdownOpen, setIsDropdownOpen] = React.useState(false)
+  const [customRole, setCustomRole] = React.useState('')
+  const [jobDescription, setJobDescription] = React.useState('')
   const fileInputRef = React.useRef(null)
   const stepTimerRef = React.useRef(null)
+  const dropdownRef = React.useRef(null)
+
+  React.useEffect(() => {
+    function handleOutsideClick(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [])
 
   const user = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+  }, [])
+
+  React.useEffect(() => {
+    const apiUrl = getApiUrl()
+    fetch(`${apiUrl}/scoring/templates`)
+      .then(r => r.json())
+      .then(data => {
+        const list = Array.isArray(data) ? data : []
+        setTemplates(list)
+        if (list.length) setSelectedTemplateId(String(list[0].id))
+      })
+      .catch(() => setTemplates([]))
   }, [])
 
   function onDrag(e, on) { e.preventDefault(); setDragging(on) }
@@ -93,7 +122,12 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
     formData.append('file', file)
 
     try {
-      const resp = await fetch(`${apiUrl}/upload-resume?user_id=${user.id || 1}`, {
+      const params = new URLSearchParams({ user_id: String(user.id || 1) })
+      if (scoringMode === 'default' && selectedTemplateId) params.set('template_id', selectedTemplateId)
+      if (customRole.trim()) params.set('role_title', customRole.trim())
+      if (jobDescription.trim()) params.set('job_description', jobDescription.trim())
+
+      const resp = await fetch(`${apiUrl}/upload-resume-v2?${params.toString()}`, {
         method: 'POST', body: formData
       })
       clearInterval(stepTimerRef.current)
@@ -117,11 +151,12 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
     const raw = data.analysis || ''
     const parsed = parseAnalysis(raw)
     const finalScore = data.final_score || data.score || parsed.score || 0
-    const geminiScore = data.gemini_score || finalScore
-    const penalty = data.penalty || 0
+    const vectorScore = data.vector_score ?? null
+    const penalty = data.penalty_total ?? data.penalty ?? 0
     const suggestedRole = data.suggested_role || ''
     const missingKeywords = data.missing_keywords || []
     const foundKeywords = data.found_keywords || []
+    const scoringEngine = data.scoring_engine || 'legacy'
 
     const strengths = parsed.strengths.length ? parsed.strengths : ['Upload a cleaner PDF for detailed analysis']
     const improvements = parsed.improvements.length ? parsed.improvements : ['Add quantified achievements', 'Include relevant keywords', 'Review formatting']
@@ -129,7 +164,8 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
     const tips = tipLines.length ? tipLines : improvements.slice(0, 3)
 
     setResult({
-      score: finalScore, geminiScore, penalty, suggestedRole,
+      score: finalScore, vectorScore, penalty, suggestedRole,
+      scoringEngine,
       missingKeywords, foundKeywords,
       strengths, improvements, tips,
       filename: data.original_filename || data.filename || file?.name || 'Resume',
@@ -147,7 +183,8 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
       if (n >= finalScore) clearInterval(iv)
     }, 20)
 
-    showToast(`🎉 Final Score: ${finalScore}/100 (Gemini ${geminiScore} − Penalty ${penalty})`, getScoreColor(finalScore))
+    const vectorMsg = vectorScore === null ? 'n/a' : Math.round(vectorScore)
+    showToast(`🎉 Final Score: ${finalScore}/100 (Vector ${vectorMsg} − Penalty ${penalty})`, getScoreColor(finalScore))
   }
 
   function reset() { setPhase('upload'); setResult(null); setScoreAnimVal(0); clearFile() }
@@ -159,6 +196,61 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
       {/* Upload */}
       {phase === 'upload' && (
         <div>
+          <div style={{ marginBottom: '0.9rem', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12 }}>
+            <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: '0.08em', fontWeight: 700 }}>Scoring Mode</div>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button className="apply-btn" style={scoringMode === 'default' ? { color: '#4d9fff', borderColor: 'rgba(77,159,255,0.3)' } : {}} onClick={() => setScoringMode('default')}>Template Score</button>
+              <button className="apply-btn" style={scoringMode === 'custom' ? { color: '#4d9fff', borderColor: 'rgba(77,159,255,0.3)' } : {}} onClick={() => setScoringMode('custom')}>Custom JD Score</button>
+            </div>
+
+            {scoringMode === 'default' && (
+              <div className="custom-select" ref={dropdownRef}>
+                <div
+                  className={`custom-select-trigger${isDropdownOpen ? ' open' : ''}`}
+                  onClick={() => setIsDropdownOpen(o => !o)}
+                >
+                  <span>
+                    {templates.length === 0
+                      ? 'No templates configured'
+                      : templates.find(t => String(t.id) === selectedTemplateId)
+                        ? `${templates.find(t => String(t.id) === selectedTemplateId).title} (${templates.find(t => String(t.id) === selectedTemplateId).role_title})`
+                        : 'Select a template'}
+                  </span>
+                  <span className="custom-select-arrow" />
+                </div>
+                {isDropdownOpen && templates.length > 0 && (
+                  <div className="custom-select-menu">
+                    {templates.map(t => (
+                      <div
+                        key={t.id}
+                        className={`custom-select-option${String(t.id) === selectedTemplateId ? ' selected' : ''}`}
+                        onClick={() => { setSelectedTemplateId(String(t.id)); setIsDropdownOpen(false) }}
+                      >
+                        {t.title} ({t.role_title})
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <input
+              className="form-input"
+              placeholder="Optional role override (e.g. Backend Developer)"
+              value={customRole}
+              onChange={e => setCustomRole(e.target.value)}
+            />
+
+            <textarea
+              className="form-input"
+              style={{ minHeight: 100, resize: 'vertical' }}
+              placeholder={scoringMode === 'custom' ? 'Paste custom job description for deterministic vector scoring' : 'Optional job description (overrides template description if provided)'}
+              value={jobDescription}
+              onChange={e => setJobDescription(e.target.value.slice(0, 3000))}
+            />
+            <div style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>Engine: vector similarity minus configurable keyword penalties.</div>
+          </div>
+
           <div className={`upload-zone ${dragging ? 'dragging' : ''}`}
             onDragOver={e => onDrag(e, true)} onDragLeave={e => onDrag(e, false)} onDrop={onDrop}>
             <input type="file" accept=".pdf" ref={fileInputRef} onChange={e => e.target.files[0] && pickFile(e.target.files[0])} />
@@ -231,8 +323,8 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
               {/* Score Breakdown */}
               <div style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
                 <div style={{ padding: '0.35rem 0.7rem', background: 'rgba(0,229,160,0.06)', border: '1px solid rgba(0,229,160,0.15)', borderRadius: 8, fontSize: '0.72rem', fontWeight: 600 }}>
-                  <span style={{ color: 'var(--muted)' }}>Gemini: </span>
-                  <span style={{ color: 'var(--accent)', fontWeight: 800 }}>{result.geminiScore}</span>
+                  <span style={{ color: 'var(--muted)' }}>Vector: </span>
+                  <span style={{ color: 'var(--accent)', fontWeight: 800 }}>{result.vectorScore == null ? 'n/a' : Math.round(result.vectorScore)}</span>
                 </div>
                 <div style={{ padding: '0.35rem 0.7rem', background: 'rgba(255,92,135,0.06)', border: '1px solid rgba(255,92,135,0.15)', borderRadius: 8, fontSize: '0.72rem', fontWeight: 600 }}>
                   <span style={{ color: 'var(--muted)' }}>Penalty: </span>
@@ -244,8 +336,12 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
                 </div>
               </div>
 
+              <div style={{ marginBottom: '0.5rem' }}>
+                <span className="jtag" style={{ borderColor: 'rgba(77,159,255,0.2)', color: '#4d9fff' }}>Engine: {result.scoringEngine}</span>
+              </div>
+
               <div className="score-summary-txt">
-                Your resume scored {result.score}/100 (Gemini {result.geminiScore} − Penalty {result.penalty}). {result.score >= 75 ? "You're competitive for most roles." : 'Review the improvements below to strengthen your resume.'}
+                Your resume scored {result.score}/100 using deterministic vector scoring. {result.score >= 75 ? "You're competitive for most roles." : 'Review the improvements below to strengthen your resume.'}
               </div>
             </div>
           </div>
@@ -312,7 +408,7 @@ function JobMatchings({ showToast }) {
   const [filter, setFilter] = React.useState('all')
   const [query, setQuery] = React.useState('')
   const [sortBy, setSortBy] = React.useState('hybrid')
-  const [selectedJob, setSelectedJob] = React.useState(null)
+  const navigate = useNavigate()
 
   const user = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
@@ -363,6 +459,9 @@ function JobMatchings({ showToast }) {
 
   return (
     <div className="panel active">
+      <div style={{ marginBottom: '0.75rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+        Eligibility checks are included in your match scores (rule + vector + hybrid).
+      </div>
       <div className="job-filters" style={{ marginBottom: '0.8rem' }}>
         {[['all', 'All'], ['sde', 'Software Dev'], ['data', 'Data Science'], ['product', 'Product']].map(([v, l]) => (
           <div key={v} className={`fchip ${filter === v ? 'active' : ''}`} onClick={() => setFilter(v)}>{l}</div>
@@ -387,7 +486,7 @@ function JobMatchings({ showToast }) {
       ) : (
         <div className="jobs-list">
           {jobs.map(j => (
-            <div className="job-row" key={j.id} onClick={() => setSelectedJob(j)} style={{ cursor: 'pointer' }}>
+            <div className="job-row" key={j.id} onClick={() => navigate(`/jobs/${j.id}`)} style={{ cursor: 'pointer' }}>
               <div className="job-logo">{logoMap[j.department] || '🏢'}</div>
               <div className="job-main">
                 <div className="job-role">{j.role_title}</div>
@@ -409,7 +508,7 @@ function JobMatchings({ showToast }) {
                 {!j.application_status || j.application_status === 'saved' ? (
                   <div style={{ display: 'flex', gap: '0.35rem' }}>
                     <button className="apply-btn" onClick={(e) => { e.stopPropagation(); saveOrApply(j.id, 'save') }}>Save</button>
-                    <button className="apply-btn" onClick={(e) => { e.stopPropagation(); saveOrApply(j.id, 'apply') }}>Apply</button>
+                    <button className="apply-btn" onClick={(e) => { e.stopPropagation(); navigate(`/jobs/${j.id}`) }}>Apply</button>
                   </div>
                 ) : (
                   <button className="apply-btn" onClick={(e) => { e.stopPropagation(); showToast(`Current status: ${j.application_status}`, '#4d9fff') }}>Status</button>
@@ -417,23 +516,6 @@ function JobMatchings({ showToast }) {
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {selectedJob && (
-        <div className="modal-overlay active" onClick={() => setSelectedJob(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 650 }}>
-            <button className="close-btn" onClick={() => setSelectedJob(null)}>✕</button>
-            <div className="modal-title" style={{ marginBottom: '0.3rem' }}>{selectedJob.role_title}</div>
-            <div className="modal-sub" style={{ marginBottom: '0.8rem' }}>{selectedJob.company_name} · {selectedJob.location}</div>
-            <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.8rem', flexWrap: 'wrap' }}>
-              <span className="jtag">Hybrid {selectedJob.match}%</span>
-              <span className="jtag">Rule {selectedJob.rule_score ?? 0}%</span>
-              <span className="jtag">Vector {Math.round(selectedJob.vector_score ?? 0)}%</span>
-            </div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '0.45rem' }}>Description (Markdown)</div>
-            <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '0.9rem', maxHeight: 250, overflowY: 'auto', fontSize: '0.84rem', lineHeight: 1.65 }} dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedJob.description || '*No description provided*') }} />
-          </div>
         </div>
       )}
     </div>
@@ -506,6 +588,12 @@ function ApplicationsTab({ showToast }) {
               <div className="job-main">
                 <div className="job-role">{item.job?.role_title || 'Job'}</div>
                 <div className="job-co">{item.job?.company_name} · {item.job?.location}</div>
+                {item.resume?.filename && (
+                  <div style={{ marginTop: '0.35rem', fontSize: '0.73rem', color: 'var(--muted)' }}>
+                    Applied with: {item.resume.filename}
+                    {item.resume.deleted ? ' (deleted later)' : ''}
+                  </div>
+                )}
                 {item.recruiter_note && <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: '#4d9fff' }}>Recruiter Note: {item.recruiter_note}</div>}
               </div>
               <div className="job-right">
@@ -564,7 +652,8 @@ function HistoryTab({ showToast }) {
       showToast(data.error, 'var(--accent3)')
       return
     }
-    showToast('Resume deleted.', '#f0b429')
+    const preserved = data.applications_preserved || 0
+    showToast(`Resume deleted. Applications preserved: ${preserved}.`, '#f0b429')
     loadResumes()
   }
 
@@ -608,16 +697,155 @@ function HistoryTab({ showToast }) {
   )
 }
 
-/* ═══════ ELIGIBILITY TAB ═══════ */
-function EligibilityTab() {
+/* ═══════ LINKEDIN SUGGESTIONS TAB ═══════ */
+function LinkedInTab({ showToast }) {
+  const [data, setData] = React.useState(null)
+  const [loading, setLoading] = React.useState(true)
+  const [refreshing, setRefreshing] = React.useState(false)
+  const [error, setError] = React.useState('')
+
+  const user = React.useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+  }, [])
+
+  function loadRecommendations(forceRefresh = false) {
+    if (!user.id) { setLoading(false); return }
+    const apiUrl = getApiUrl()
+    const endpoint = forceRefresh
+      ? `${apiUrl}/linkedin-recommendations/refresh?user_id=${user.id}`
+      : `${apiUrl}/linkedin-recommendations?user_id=${user.id}`
+    const method = forceRefresh ? 'POST' : 'GET'
+
+    if (forceRefresh) setRefreshing(true); else setLoading(true)
+    setError('')
+
+    fetch(endpoint, { method })
+      .then(r => r.json())
+      .then(res => {
+        if (res.detail) { setError(res.detail); setData(null) }
+        else { setData(res) }
+        setLoading(false); setRefreshing(false)
+        if (forceRefresh && !res.detail) showToast('LinkedIn recommendations refreshed.', 'var(--accent)')
+      })
+      .catch(err => {
+        setError('Could not connect to backend.')
+        setLoading(false); setRefreshing(false)
+      })
+  }
+
+  React.useEffect(() => { loadRecommendations() }, [user.id])
+
+  if (loading) return (
+    <div className="panel active">
+      <div className="loader">
+        <div className="spinner"></div>
+        <div className="loader-step">Finding LinkedIn jobs for you…</div>
+        <div className="loader-sub">Gemini is extracting search parameters from your resume</div>
+      </div>
+    </div>
+  )
+
   return (
     <div className="panel active">
-      <div className="elig-placeholder">
-        <div className="elig-icon">🔍</div>
-        <div className="elig-title">Eligibility Checker</div>
-        <div className="elig-sub">We're building an engine that cross-checks your profile against recruiter criteria — CGPA, skills, experience, and more.</div>
-        <div className="elig-pill">⏳ Coming in next release</div>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>LinkedIn Suggestions</div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '0.2rem' }}>
+            Jobs posted within the last month · powered by your resume · not a replacement for LinkedIn
+          </div>
+          <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.75rem', background: 'rgba(255,193,7,0.1)', border: '1px solid rgba(255,193,7,0.35)', borderRadius: 8, fontSize: '0.7rem', color: 'var(--text)', lineHeight: 1.5 }}>
+            ⚠️ <strong>Note:</strong> These job openings are sourced externally and have <strong>not been verified or approved by the admin</strong>. Please exercise caution. If you are interested in any of these positions or need assistance, feel free to get in touch with us.
+          </div>
+        </div>
+        <button
+          className="apply-btn"
+          style={{ whiteSpace: 'nowrap' }}
+          disabled={refreshing}
+          onClick={() => loadRecommendations(true)}
+        >
+          {refreshing ? 'Refreshing…' : '🔄 Refresh'}
+        </button>
       </div>
+
+      {/* Search params used */}
+      {data?.search_params && (
+        <div style={{ marginBottom: '0.9rem', padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, fontSize: '0.72rem', color: 'var(--muted)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: 'var(--text)' }}>Search used:</span>
+          {data.search_params.keyword && <span className="jtag" style={{ color: '#4d9fff', borderColor: 'rgba(77,159,255,0.25)' }}>🔍 {data.search_params.keyword}</span>}
+          {data.search_params.location && <span className="jtag">📍 {data.search_params.location}</span>}
+          {data.search_params.experienceLevel && <span className="jtag">🎓 {data.search_params.experienceLevel}</span>}
+          {data.search_params.jobType && <span className="jtag">💼 {data.search_params.jobType}</span>}
+          {data.search_params.remoteFilter && <span className="jtag">🌐 {data.search_params.remoteFilter}</span>}
+          {data.cached_at && (
+            <span style={{ marginLeft: 'auto', fontSize: '0.67rem', color: 'var(--muted)' }}>
+              {data.from_cache ? 'cached' : 'fresh'} · {new Date(data.cached_at).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Error from worker (non-fatal — show alongside any results) */}
+      {data?.error && (
+        <div style={{ marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'rgba(255,92,135,0.07)', border: '1px solid rgba(255,92,135,0.2)', borderRadius: 10, fontSize: '0.73rem', color: 'var(--accent3)' }}>
+          ⚠️ {data.error}
+        </div>
+      )}
+
+      {/* Fatal error (no data at all) */}
+      {error && (
+        <div className="history-empty">
+          <div className="history-empty-icon">⚠️</div>
+          <div className="history-empty-title">{error}</div>
+          <div className="history-empty-sub">Make sure you have an active resume and the backend is running.</div>
+          <button className="apply-btn" style={{ marginTop: '0.75rem' }} onClick={() => loadRecommendations()}>Retry</button>
+        </div>
+      )}
+
+      {/* Job cards */}
+      {!error && data && (
+        data.jobs.length === 0 ? (
+          <div className="history-empty">
+            <div className="history-empty-icon">🔍</div>
+            <div className="history-empty-title">No LinkedIn jobs found</div>
+            <div className="history-empty-sub">Try refreshing, or LinkedIn may be rate-limiting requests right now.</div>
+          </div>
+        ) : (
+          <div className="jobs-list">
+            {data.jobs.map((job, i) => (
+              <div className="job-row" key={i}>
+                <div className="job-logo" style={{ overflow: 'hidden', padding: 0, background: 'var(--surface-2)' }}>
+                  {job.companyLogo
+                    ? <img src={job.companyLogo} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 8 }} onError={e => { e.target.style.display = 'none' }} />
+                    : <span style={{ fontSize: '1.3rem' }}>🏢</span>}
+                </div>
+                <div className="job-main">
+                  <div className="job-role">{job.position || 'Unknown Position'}</div>
+                  <div className="job-co">{job.company || '—'}{job.location ? ` · ${job.location}` : ''}</div>
+                  <div style={{ marginTop: '0.35rem', display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                    {job.agoTime && <span className="jtag" style={{ color: 'var(--accent)', borderColor: 'rgba(0,229,160,0.2)' }}>🕐 {job.agoTime}</span>}
+                    {job.salary && job.salary !== '' && <span className="jtag" style={{ color: '#f0b429', borderColor: 'rgba(240,180,41,0.2)' }}>💰 {job.salary}</span>}
+                  </div>
+                </div>
+                <div className="job-right" style={{ alignItems: 'flex-end', gap: '0.4rem' }}>
+                  {job.jobUrl && (
+                    <a
+                      href={job.jobUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="apply-btn"
+                      style={{ textDecoration: 'none', display: 'inline-block', color: '#4d9fff', borderColor: 'rgba(77,159,255,0.3)' }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      View on LinkedIn ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
     </div>
   )
 }
@@ -654,9 +882,9 @@ export default function Dashboard() {
   const tabs = [
     { id: 'analyzer', label: '🧠 Resume Analyzer' },
     { id: 'jobs', label: '💼 Job Matchings' },
+    { id: 'linkedin', label: '🔗 LinkedIn Suggestions' },
     { id: 'applications', label: '📨 My Applications' },
     { id: 'history', label: '📋 History' },
-    { id: 'eligibility', label: '✅ Eligibility' },
   ]
 
   return (
@@ -717,9 +945,9 @@ export default function Dashboard() {
         {/* Panels */}
         {activeTab === 'analyzer' && <ResumeAnalyzer showToast={showToast} onScoreUpdate={(score, role) => { setLatestScore(score); if (role) setLatestRole(role) }} />}
         {activeTab === 'jobs' && <JobMatchings showToast={showToast} />}
+        {activeTab === 'linkedin' && <LinkedInTab showToast={showToast} />}
         {activeTab === 'applications' && <ApplicationsTab showToast={showToast} />}
         {activeTab === 'history' && <HistoryTab showToast={showToast} />}
-        {activeTab === 'eligibility' && <EligibilityTab />}
       </div>
 
       <ConfigModal active={configOpen} onClose={() => setConfigOpen(false)} showToast={showToast} />

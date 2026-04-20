@@ -1,4 +1,5 @@
 import os
+import json
 from google import genai
 import pdfplumber
 import time
@@ -17,7 +18,6 @@ def extract_text_from_pdf(file_path: str) -> str:
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
             text += page.extract_text() or ""
-
     return text
 
 
@@ -249,6 +249,8 @@ Resume:
 {text[:3000]}
 """
 
+    from google.genai.errors import ClientError, ServerError
+
     models_to_try = [
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
@@ -261,13 +263,114 @@ Resume:
                     model=model_name,
                     contents=prompt
                 )
-                return response.text
+                if response.text:
+                    return response.text
+                break
+            except ClientError as e:
+                if e.code == 429:
+                    # Quota exhausted — try next model, no point retrying this one
+                    break
+                if e.code in (400, 401, 403):
+                    return "AI service unavailable: API key is invalid or has been revoked."
+                break
+            except ServerError:
+                # 503 overloaded — retry once, then move to next model
+                if attempt == 0:
+                    time.sleep(2)
             except Exception as e:
                 print("REAL ERROR:", e)
-                if "503" in str(e):
+                break
+
+    return "AI quota exceeded or service unavailable. Your resume was saved — please try again shortly."
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LINKEDIN SEARCH PARAMETER EXTRACTION
+# Prompts Gemini to derive job search parameters from a resume so we
+# can surface relevant LinkedIn job recommendations.
+# ═══════════════════════════════════════════════════════════════════
+
+_EXPERIENCE_LEVELS = {"internship", "entry level", "associate", "senior", "director", "executive"}
+_JOB_TYPES = {"full time", "part time", "contract", "temporary", "volunteer", "internship"}
+_REMOTE_FILTERS = {"on-site", "on site", "remote", "hybrid"}
+
+
+def get_linkedin_search_params(resume_text: str, analysis_text: str = "") -> dict:
+    """
+    Uses Gemini to extract LinkedIn job search parameters from a resume.
+    Returns a dict with keys: keyword, location, experienceLevel, jobType, remoteFilter.
+    Falls back to safe defaults if Gemini is unavailable or returns unparseable output.
+    """
+    defaults = {
+        "keyword": "",
+        "location": "",
+        "experienceLevel": "entry level",
+        "jobType": "",
+        "remoteFilter": "",
+    }
+
+    if client is None:
+        return defaults
+
+    context = f"Resume text (truncated):\n{resume_text[:2500]}"
+    if analysis_text and analysis_text.strip():
+        context += f"\n\nAI Analysis:\n{analysis_text[:800]}"
+
+    prompt = f"""You are a job search assistant. Based on the following resume, extract the best LinkedIn job search parameters.
+
+{context}
+
+Return ONLY a valid JSON object with these exact keys (no markdown, no explanation):
+- "keyword": a concise job title or skill keyword (e.g. "Software Engineer", "Data Analyst", "React Developer")
+- "location": the candidate's city/country if mentioned, otherwise empty string
+- "experienceLevel": one of: internship, entry level, associate, senior, director, executive
+- "jobType": one of: full time, part time, contract, temporary, volunteer, internship — or empty string
+- "remoteFilter": one of: on-site, remote, hybrid — or empty string
+
+JSON output only:"""
+
+    from google.genai.errors import ClientError, ServerError
+
+    models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+    for model_name in models_to_try:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                raw = response.text or ""
+                # Strip possible markdown code fences
+                raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+                parsed = json.loads(raw)
+
+                result = dict(defaults)
+                result["keyword"] = str(parsed.get("keyword", "")).strip()[:100]
+                result["location"] = str(parsed.get("location", "")).strip()[:100]
+
+                exp = str(parsed.get("experienceLevel", "")).strip().lower()
+                if exp in _EXPERIENCE_LEVELS:
+                    result["experienceLevel"] = exp
+
+                jt = str(parsed.get("jobType", "")).strip().lower()
+                if jt in _JOB_TYPES:
+                    result["jobType"] = jt
+
+                rf = str(parsed.get("remoteFilter", "")).strip().lower()
+                if rf in _REMOTE_FILTERS:
+                    result["remoteFilter"] = rf
+
+                return result
+            except ClientError as e:
+                if e.code == 429:
+                    break  # Quota exhausted — try next model
+                break  # 400/401/403 or other client error — bail entirely
+            except ServerError:
+                if attempt == 0:
                     time.sleep(2)
-                else:
-                    break
-       
-    return "AI service overloaded. Try again later."
+            except Exception:
+                break
+
+    return defaults
 

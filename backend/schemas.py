@@ -47,6 +47,7 @@ class JobListingUpdate(BaseModel):
 class ApplicationCreate(BaseModel):
     job_listing_id: int
     action: str = "apply"  # apply | save
+    resume_id: Optional[int] = None
 
 
 class ApplicationStatusUpdate(BaseModel):
@@ -55,3 +56,31 @@ class ApplicationStatusUpdate(BaseModel):
 
 class RecruiterNoteUpdate(BaseModel):
     recruiter_note: str
+
+
+class PenaltyRuleIn(BaseModel):
+    category: str
+    label: str
+    keywords: List[str]
+    penalty_value: int
+    is_active: bool = True
+
+
+class PenaltyRulesUpsert(BaseModel):
+    rules: List[PenaltyRuleIn]
+
+
+class ScoringTemplateCreate(BaseModel):
+    title: str
+    role_title: str
+    description: str = ""
+    category: str = "General"
+    is_active: bool = True
+
+
+class ScoringTemplateUpdate(BaseModel):
+    title: Optional[str] = None
+    role_title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    is_active: Optional[bool] = None

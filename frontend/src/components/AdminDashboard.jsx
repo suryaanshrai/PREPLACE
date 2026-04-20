@@ -32,6 +32,8 @@ export default function AdminDashboard() {
     { id: 'overview', label: '📊 Overview' },
     { id: 'recruiters', label: '🏢 Recruiters' },
     { id: 'jobs', label: '📋 Job Listings' },
+    { id: 'templates', label: '🧩 Templates' },
+    { id: 'penalties', label: '⚖️ Penalties' },
     { id: 'applicants', label: '🎓 Applicants' },
     { id: 'audit', label: '🧾 Audit Logs' },
   ]
@@ -80,12 +82,185 @@ export default function AdminDashboard() {
         {activeTab === 'overview' && <OverviewPanel stats={stats} />}
         {activeTab === 'recruiters' && <RecruitersPanel showToast={showToast} onUpdate={refreshStats} />}
         {activeTab === 'jobs' && <JobListingsPanel showToast={showToast} onUpdate={refreshStats} />}
+        {activeTab === 'templates' && <ScoringTemplatesPanel showToast={showToast} />}
+        {activeTab === 'penalties' && <PenaltyDefaultsPanel showToast={showToast} />}
         {activeTab === 'applicants' && <ApplicantsPanel showToast={showToast} />}
         {activeTab === 'audit' && <AuditLogsPanel />}
       </div>
 
       <Toast toast={toast} />
     </>
+  )
+}
+
+function ScoringTemplatesPanel({ showToast }) {
+  const [templates, setTemplates] = React.useState([])
+  const [form, setForm] = React.useState({ title: '', role_title: '', description: '', category: 'General', is_active: true })
+  const [loading, setLoading] = React.useState(true)
+
+  function loadTemplates() {
+    const apiUrl = getApiUrl()
+    setLoading(true)
+    fetch(`${apiUrl}/admin/scoring-templates`)
+      .then(r => r.json())
+      .then(data => { setTemplates(Array.isArray(data) ? data : []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  React.useEffect(() => { loadTemplates() }, [])
+
+  async function createTemplate() {
+    if (!form.title.trim() || !form.role_title.trim()) {
+      showToast('Title and role are required.', 'var(--accent3)')
+      return
+    }
+    const apiUrl = getApiUrl()
+    const resp = await fetch(`${apiUrl}/admin/scoring-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    setForm({ title: '', role_title: '', description: '', category: 'General', is_active: true })
+    showToast('Template created.', 'var(--accent)')
+    loadTemplates()
+  }
+
+  async function toggleTemplate(template) {
+    const apiUrl = getApiUrl()
+    await fetch(`${apiUrl}/admin/scoring-templates/${template.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: !template.is_active }),
+    })
+    loadTemplates()
+  }
+
+  async function deleteTemplate(templateId) {
+    const apiUrl = getApiUrl()
+    await fetch(`${apiUrl}/admin/scoring-templates/${templateId}`, { method: 'DELETE' })
+    loadTemplates()
+  }
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading templates…</div></div></div>
+
+  return (
+    <div className="panel active">
+      <div style={{ display: 'grid', gap: '0.6rem', marginBottom: '0.9rem' }}>
+        <input className="form-input" placeholder="Template title" value={form.title} onChange={e => setForm(prev => ({ ...prev, title: e.target.value }))} />
+        <input className="form-input" placeholder="Role title" value={form.role_title} onChange={e => setForm(prev => ({ ...prev, role_title: e.target.value }))} />
+        <input className="form-input" placeholder="Category" value={form.category} onChange={e => setForm(prev => ({ ...prev, category: e.target.value }))} />
+        <textarea className="form-input" style={{ minHeight: 90, resize: 'vertical' }} placeholder="Sample job description" value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} />
+        <button className="apply-btn" onClick={createTemplate}>Create Template</button>
+      </div>
+
+      <div className="jobs-list">
+        {templates.map(t => (
+          <div className="job-row" key={t.id}>
+            <div className="job-logo">🧩</div>
+            <div className="job-main">
+              <div className="job-role">{t.title}</div>
+              <div className="job-co">{t.role_title} · {t.category}</div>
+              <div style={{ marginTop: '0.3rem', fontSize: '0.72rem', color: 'var(--muted)' }}>{t.description || 'No description'}</div>
+            </div>
+            <div className="job-right" style={{ display: 'flex', gap: '0.4rem' }}>
+              <button className="apply-btn" onClick={() => toggleTemplate(t)}>{t.is_active ? 'Deactivate' : 'Activate'}</button>
+              <button className="apply-btn" style={{ color: 'var(--accent3)' }} onClick={() => deleteTemplate(t.id)}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PenaltyDefaultsPanel({ showToast }) {
+  const [rules, setRules] = React.useState([])
+  const [loading, setLoading] = React.useState(true)
+
+  function loadRules() {
+    const apiUrl = getApiUrl()
+    setLoading(true)
+    fetch(`${apiUrl}/admin/penalty-defaults`)
+      .then(r => r.json())
+      .then(data => {
+        const list = Array.isArray(data?.rules) ? data.rules : []
+        setRules(list.map((r, idx) => ({
+          id: r.id || `rule-${idx}`,
+          category: r.category || '',
+          label: r.label || '',
+          keywords: Array.isArray(r.keywords) ? r.keywords.join(', ') : (r.keywords || ''),
+          penalty_value: r.penalty_value ?? 0,
+          is_active: r.is_active !== false,
+        })))
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }
+
+  React.useEffect(() => { loadRules() }, [])
+
+  function addRule() {
+    setRules(prev => [...prev, { id: `new-${Date.now()}`, category: '', label: '', keywords: '', penalty_value: 1, is_active: true }])
+  }
+
+  function updateRule(idx, key, value) {
+    setRules(prev => prev.map((r, i) => i === idx ? { ...r, [key]: value } : r))
+  }
+
+  async function saveRules() {
+    const payload = {
+      rules: rules
+        .filter(r => r.category.trim() && r.label.trim())
+        .map(r => ({
+          category: r.category.trim(),
+          label: r.label.trim(),
+          keywords: r.keywords.split(',').map(x => x.trim()).filter(Boolean),
+          penalty_value: Math.max(0, parseInt(r.penalty_value) || 0),
+          is_active: !!r.is_active,
+        })),
+    }
+    const apiUrl = getApiUrl()
+    const resp = await fetch(`${apiUrl}/admin/penalty-defaults`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    showToast('Default penalties updated.', 'var(--accent)')
+    loadRules()
+  }
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading penalties…</div></div></div>
+
+  return (
+    <div className="panel active">
+      <div style={{ marginBottom: '0.8rem', display: 'flex', gap: '0.6rem' }}>
+        <button className="apply-btn" onClick={addRule}>+ Add Rule</button>
+        <button className="apply-btn" onClick={saveRules}>Save Defaults</button>
+      </div>
+      <div style={{ display: 'grid', gap: '0.55rem' }}>
+        {rules.map((rule, idx) => (
+          <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 2fr 110px 90px', gap: '0.45rem', alignItems: 'center' }}>
+            <input className="form-input" value={rule.category} placeholder="category" onChange={e => updateRule(idx, 'category', e.target.value)} />
+            <input className="form-input" value={rule.label} placeholder="label" onChange={e => updateRule(idx, 'label', e.target.value)} />
+            <input className="form-input" value={rule.keywords} placeholder="keywords comma-separated" onChange={e => updateRule(idx, 'keywords', e.target.value)} />
+            <input className="form-input" type="number" min="0" value={rule.penalty_value} onChange={e => updateRule(idx, 'penalty_value', e.target.value)} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', color: 'var(--muted)' }}>
+              <input type="checkbox" checked={rule.is_active} onChange={e => updateRule(idx, 'is_active', e.target.checked)} /> Active
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 

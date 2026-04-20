@@ -7,6 +7,7 @@ export default function RecruiterDashboard() {
   const navigate = useNavigate()
   const { toast, showToast } = useToast()
   const [activeTab, setActiveTab] = React.useState('applicants')
+  const [scoringListingId, setScoringListingId] = React.useState('')
 
   const user = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
@@ -32,6 +33,7 @@ export default function RecruiterDashboard() {
     { id: 'applicants', label: '👥 Applicants' },
     { id: 'post', label: '➕ Post a Job' },
     { id: 'listings', label: '📋 My Listings' },
+    { id: 'scoring', label: '🎯 Scoring' },
     { id: 'analytics', label: '📊 Analytics' },
   ]
 
@@ -68,12 +70,151 @@ export default function RecruiterDashboard() {
 
         {activeTab === 'applicants' && <ApplicantsPanel showToast={showToast} />}
         {activeTab === 'post' && <PostJobPanel showToast={showToast} onPosted={() => setActiveTab('listings')} />}
-        {activeTab === 'listings' && <ListingsPanel showToast={showToast} userId={user.id} />}
+        {activeTab === 'listings' && <ListingsPanel showToast={showToast} userId={user.id} onConfigureScoring={(id) => { setScoringListingId(String(id)); setActiveTab('scoring') }} />}
+        {activeTab === 'scoring' && <ScoringSettingsPanel showToast={showToast} userId={user.id} initialListingId={scoringListingId} />}
         {activeTab === 'analytics' && <RecruiterAnalyticsPanel userId={user.id} />}
       </div>
 
       <Toast toast={toast} />
     </>
+  )
+}
+
+function normalizeRules(data) {
+  const list = Array.isArray(data?.rules) ? data.rules : []
+  return list.map((r, idx) => ({
+    id: r.id || `rule-${idx}`,
+    category: r.category || '',
+    label: r.label || '',
+    keywords: Array.isArray(r.keywords) ? r.keywords.join(', ') : (r.keywords || ''),
+    penalty_value: r.penalty_value ?? 0,
+    is_active: r.is_active !== false,
+  }))
+}
+
+function ScoringSettingsPanel({ showToast, userId, initialListingId }) {
+  const [listings, setListings] = React.useState([])
+  const [selectedListing, setSelectedListing] = React.useState(initialListingId || '')
+  const [rules, setRules] = React.useState([])
+  const [loading, setLoading] = React.useState(false)
+
+  React.useEffect(() => {
+    if (initialListingId) setSelectedListing(initialListingId)
+  }, [initialListingId])
+
+  React.useEffect(() => {
+    const apiUrl = getApiUrl()
+    fetch(`${apiUrl}/job-listings?recruiter_id=${userId}`)
+      .then(r => r.json())
+      .then(data => setListings(Array.isArray(data) ? data : []))
+      .catch(() => setListings([]))
+  }, [userId])
+
+  function addRule() {
+    setRules(prev => [...prev, { id: `new-${Date.now()}`, category: '', label: '', keywords: '', penalty_value: 1, is_active: true }])
+  }
+
+  function updateRule(idx, key, value) {
+    setRules(prev => prev.map((r, i) => i === idx ? { ...r, [key]: value } : r))
+  }
+
+  function removeRule(idx) {
+    setRules(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function loadRules(listingId = selectedListing) {
+    if (!listingId) { setRules([]); return }
+    const apiUrl = getApiUrl()
+    const params = new URLSearchParams({ recruiter_id: String(userId), listing_id: listingId })
+    setLoading(true)
+    fetch(`${apiUrl}/recruiter/penalties?${params.toString()}`)
+      .then(r => r.json())
+      .then(data => { setRules(normalizeRules(data)); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  React.useEffect(() => {
+    loadRules(selectedListing)
+  }, [userId, selectedListing])
+
+  async function saveRules() {
+    if (!selectedListing) { showToast('Select a job listing first.', 'var(--accent3)'); return }
+    const payload = {
+      rules: rules
+        .filter(r => r.category.trim() && r.label.trim())
+        .map(r => ({
+          category: r.category.trim(),
+          label: r.label.trim(),
+          keywords: r.keywords.split(',').map(x => x.trim()).filter(Boolean),
+          penalty_value: Math.max(0, parseInt(r.penalty_value) || 0),
+          is_active: !!r.is_active,
+        })),
+    }
+    const apiUrl = getApiUrl()
+    const params = new URLSearchParams({ recruiter_id: String(userId), listing_id: selectedListing })
+
+    const resp = await fetch(`${apiUrl}/recruiter/penalties?${params.toString()}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      showToast(data.error, 'var(--accent3)')
+      return
+    }
+    showToast('Scoring penalties saved.', 'var(--accent)')
+    loadRules(selectedListing)
+  }
+
+  if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading scoring settings…</div></div></div>
+
+  return (
+    <div className="panel active">
+      <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.8rem' }}>
+        <select className="form-input" style={{ width: 320 }} value={selectedListing} onChange={e => setSelectedListing(e.target.value)}>
+          <option value="" disabled>Select a job listing…</option>
+          {listings.map(l => <option key={l.id} value={String(l.id)}>{l.role_title}</option>)}
+        </select>
+        <button className="apply-btn" onClick={addRule} disabled={!selectedListing}>+ Add Rule</button>
+      </div>
+
+      {!selectedListing ? (
+        <div className="history-empty">
+          <div className="history-empty-icon">🎯</div>
+          <div className="history-empty-title">Select a listing to configure its scoring rules</div>
+          <div className="history-empty-sub">Each job listing has its own independent penalty rules. Pick one above to get started.</div>
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: '0.76rem', color: 'var(--muted)', marginBottom: '0.8rem' }}>
+            Configure keyword penalties used in deterministic score = vector similarity - penalty total.
+          </div>
+
+          <div style={{ display: 'grid', gap: '0.55rem' }}>
+            {rules.length === 0 && (
+              <div style={{ fontSize: '0.8rem', color: 'var(--muted)', padding: '0.8rem 0' }}>No rules yet. Click <strong>+ Add Rule</strong> to define penalties for this listing.</div>
+            )}
+            {rules.map((rule, idx) => (
+              <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.4fr 2fr 110px 90px 80px', gap: '0.45rem', alignItems: 'center' }}>
+                <input className="form-input" placeholder="category" value={rule.category} onChange={e => updateRule(idx, 'category', e.target.value)} />
+                <input className="form-input" placeholder="label" value={rule.label} onChange={e => updateRule(idx, 'label', e.target.value)} />
+                <input className="form-input" placeholder="keywords comma-separated" value={rule.keywords} onChange={e => updateRule(idx, 'keywords', e.target.value)} />
+                <input className="form-input" type="number" min="0" max="50" value={rule.penalty_value} onChange={e => updateRule(idx, 'penalty_value', e.target.value)} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', color: 'var(--muted)' }}>
+                  <input type="checkbox" checked={rule.is_active} onChange={e => updateRule(idx, 'is_active', e.target.checked)} /> Active
+                </label>
+                <button className="apply-btn" style={{ color: 'var(--accent3)' }} onClick={() => removeRule(idx)}>Delete</button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="apply-btn" onClick={saveRules}>Save Rules</button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -159,6 +300,8 @@ function ApplicantsPanel({ showToast }) {
   const [selectedListing, setSelectedListing] = React.useState('')
   const [modalApp, setModalApp] = React.useState(null)
   const [loading, setLoading] = React.useState(true)
+
+  const apiUrl = React.useMemo(() => getApiUrl(), [])
 
   const user = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
@@ -326,6 +469,14 @@ function ApplicantsPanel({ showToast }) {
                 onClick={() => { updateStatus(modalApp.id, 'shortlisted'); setModalApp(null) }}>✅ Shortlist</button>
               <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(77,159,255,0.08)', border: '1px solid rgba(77,159,255,0.2)', borderRadius: 10, color: '#4d9fff', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
                 onClick={() => { window.location.href = `mailto:${modalApp.email}`; setModalApp(null) }}>📧 Contact</button>
+              <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(15,190,233,0.08)', border: '1px solid rgba(15,190,233,0.2)', borderRadius: 10, color: '#0fbde9', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => {
+                  if (!modalApp.resume_download_url) {
+                    showToast('Resume file is unavailable for this application.', 'var(--accent3)')
+                    return
+                  }
+                  window.open(`${apiUrl}${modalApp.resume_download_url}`, '_blank', 'noopener,noreferrer')
+                }}>⬇ Download Resume</button>
               <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(255,92,135,0.08)', border: '1px solid rgba(255,92,135,0.2)', borderRadius: 10, color: 'var(--accent3)', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
                 onClick={() => { updateStatus(modalApp.id, 'rejected'); setModalApp(null) }}>✕ Reject</button>
             </div>
@@ -389,7 +540,8 @@ function PostJobPanel({ showToast, onPosted }) {
     setPosting(false)
   }
 
-  const inputStyle = { width: '100%', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', outline: 'none' }
+  const inputStyle = { width: '100%', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', outline: 'none', colorScheme: 'dark' }
+  const selectStyle = { ...inputStyle, cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7a99' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")", backgroundRepeat: 'no-repeat', backgroundPosition: 'right 1rem center', paddingRight: '2.5rem' }
   const labelStyle = { fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.45rem', display: 'block' }
 
   return (
@@ -404,7 +556,7 @@ function PostJobPanel({ showToast, onPosted }) {
           </div>
           <div>
             <label style={labelStyle}>Department</label>
-            <select style={{ ...inputStyle, cursor: 'pointer' }} value={form.department} onChange={e => update('department', e.target.value)}>
+            <select style={selectStyle} value={form.department} onChange={e => update('department', e.target.value)}>
               <option value="">Select department</option>
               <option>Engineering</option>
               <option>Data Science</option>
@@ -428,7 +580,7 @@ function PostJobPanel({ showToast, onPosted }) {
           </div>
           <div>
             <label style={labelStyle}>Job Type</label>
-            <select style={{ ...inputStyle, cursor: 'pointer' }} value={form.job_type} onChange={e => update('job_type', e.target.value)}>
+            <select style={selectStyle} value={form.job_type} onChange={e => update('job_type', e.target.value)}>
               <option>Internship</option>
               <option>Full-Time</option>
               <option>Part-Time</option>
@@ -468,7 +620,7 @@ function PostJobPanel({ showToast, onPosted }) {
           </div>
           <div>
             <label style={labelStyle}>Experience Required</label>
-            <select style={{ ...inputStyle, cursor: 'pointer' }} value={form.experience} onChange={e => update('experience', e.target.value)}>
+            <select style={selectStyle} value={form.experience} onChange={e => update('experience', e.target.value)}>
               <option>Fresher (0 years)</option>
               <option>0–1 years</option>
               <option>1–2 years</option>
@@ -487,7 +639,7 @@ function PostJobPanel({ showToast, onPosted }) {
 }
 
 /* ═══════ MY LISTINGS PANEL ═══════ */
-function ListingsPanel({ showToast, userId }) {
+function ListingsPanel({ showToast, userId, onConfigureScoring }) {
   const [listings, setListings] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [editing, setEditing] = React.useState(null)
@@ -594,6 +746,7 @@ function ListingsPanel({ showToast, userId }) {
                 </button>
               )}
               <button className="apply-btn" onClick={() => { setEditing(l.id); setEditForm({ ...l }) }}>Edit</button>
+              <button className="apply-btn" onClick={() => onConfigureScoring(l.id)}>🎯 Scoring Rules</button>
               <button className="apply-btn" style={{ color: 'var(--accent3)' }} onClick={() => deleteListing(l.id)}>Delete</button>
             </div>
           </div>

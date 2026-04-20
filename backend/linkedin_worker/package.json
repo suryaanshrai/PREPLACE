@@ -1,0 +1,9 @@
+{
+  "name": "linkedin-worker",
+  "version": "1.0.0",
+  "description": "Node.js subprocess worker for LinkedIn job search",
+  "main": "search.js",
+  "dependencies": {
+    "linkedin-jobs-api": "suryaanshrai/linkedin-jobs-api#feature/mcp"
+  }
+}
