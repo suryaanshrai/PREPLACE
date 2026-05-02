@@ -9,3 +9,4 @@ python-dotenv
 chromadb
 sentence-transformers
 pytest
+email-validator

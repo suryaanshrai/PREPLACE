@@ -232,3 +232,88 @@ def test_is_education_only_work_context():
     )
     assert vs._is_education_only("langchain", resume) is False
     assert vs._is_education_only("mlflow", resume) is False
+
+
+# ── compute_job_match edge cases ──────────────────────────────────────────────
+
+def test_compute_job_match_no_skills_required():
+    """A job with no required skills should not penalise any applicant."""
+    score = compute_job_match(
+        applicant_role="Backend Developer",
+        applicant_skills=["python"],
+        applicant_score=70,
+        job_role="Backend Engineer",
+        job_skills_str="",          # no required skills
+        job_min_score=0,
+        job_department="Engineering",
+    )
+    # Should be a non-negative, reasonable score — not inflated by a free bonus
+    assert 0 <= score <= 100
+
+
+def test_compute_job_match_no_applicant_skills():
+    """An applicant with no skills should score lower than one with matching skills."""
+    with_skills = compute_job_match(
+        applicant_role="Backend Developer",
+        applicant_skills=["python", "fastapi"],
+        applicant_score=75,
+        job_role="Backend Engineer",
+        job_skills_str="python,fastapi",
+        job_min_score=0,
+        job_department="Engineering",
+    )
+    without_skills = compute_job_match(
+        applicant_role="Backend Developer",
+        applicant_skills=[],
+        applicant_score=75,
+        job_role="Backend Engineer",
+        job_skills_str="python,fastapi",
+        job_min_score=0,
+        job_department="Engineering",
+    )
+    assert with_skills > without_skills
+
+
+def test_compute_job_match_score_never_negative():
+    """Even a completely mismatched applicant must not produce a negative match score."""
+    score = compute_job_match(
+        applicant_role="Graphic Designer",
+        applicant_skills=["photoshop"],
+        applicant_score=-10,        # invalid input — must be clamped internally
+        job_role="Data Scientist",
+        job_skills_str="python,tensorflow,pytorch",
+        job_min_score=80,
+        job_department="Data",
+    )
+    assert score >= 0
+
+
+def test_compute_job_match_word_boundary_skills():
+    """'React' must not match 'Reactive' or 'Reacting'."""
+    react_score = compute_job_match(
+        applicant_role="Frontend Developer",
+        applicant_skills=["react"],
+        applicant_score=70,
+        job_role="Frontend Engineer",
+        job_skills_str="react",
+        job_min_score=0,
+        job_department="Engineering",
+    )
+    reactive_score = compute_job_match(
+        applicant_role="Frontend Developer",
+        applicant_skills=["reactive programming"],  # does NOT contain 'react' as a word
+        applicant_score=70,
+        job_role="Frontend Engineer",
+        job_skills_str="react",
+        job_min_score=0,
+        job_department="Engineering",
+    )
+    assert react_score > reactive_score
+
+
+def test_extract_skills_from_analysis_handles_empty():
+    """extract_skills_from_analysis must not crash on empty or None-like input."""
+    from utils import extract_skills_from_analysis
+    assert extract_skills_from_analysis("") == []
+    assert extract_skills_from_analysis("No skills section here.") == []
+

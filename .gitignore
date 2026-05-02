@@ -14,7 +14,6 @@ backend/uploads/
 backend/chroma_db/
 backend/.env
 backend/.env.*
-backend/tests
 
 # Frontend
 frontend/node_modules/

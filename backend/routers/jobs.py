@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
 import models
@@ -45,7 +45,7 @@ def create_job_listing(recruiter_id: int, job: JobListingCreate, db=Depends(get_
 
     profile = db.query(models.RecruiterProfile).filter(models.RecruiterProfile.user_id == recruiter_id).first()
     if not profile or profile.status != "approved":
-        return {"error": "Recruiter account is not approved by admin"}
+        raise HTTPException(status_code=403, detail="Recruiter account is not approved by admin")
 
     listing = models.JobListing(
         recruiter_id=recruiter_id,
@@ -255,7 +255,7 @@ def get_matched_jobs(
 
     query = db.query(models.JobListing).filter(models.JobListing.status == "active")
     if department:
-        query = query.filter(models.JobListing.department == department)
+        query = query.filter(models.JobListing.department.ilike(department))
     if q:
         ql = f"%{q.lower()}%"
         query = query.filter(

@@ -162,7 +162,7 @@ def admin_stats(admin: dict = Depends(_require_admin), db=Depends(get_db)):
 
 
 @router.get("/analytics/recruiter-overview", tags=["Analytics"])
-def recruiter_analytics(recruiter_id: int, db=Depends(get_db)):
+def recruiter_analytics(recruiter_id: int, admin: dict = Depends(_require_admin), db=Depends(get_db)):
     listings = db.query(models.JobListing).filter(models.JobListing.recruiter_id == recruiter_id).all()
     listing_ids = [l.id for l in listings]
     if not listing_ids:
@@ -195,7 +195,7 @@ def recruiter_analytics(recruiter_id: int, db=Depends(get_db)):
 
 
 @router.get("/analytics/applicant-overview", tags=["Analytics"])
-def applicant_analytics(user_id: int, db=Depends(get_db)):
+def applicant_analytics(user_id: int, admin: dict = Depends(_require_admin), db=Depends(get_db)):
     apps = db.query(models.Application).filter(models.Application.applicant_id == user_id).all()
     resumes = db.query(models.Resume).filter(models.Resume.user_id == user_id).all()
     breakdown = {}

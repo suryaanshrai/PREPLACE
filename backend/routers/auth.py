@@ -31,8 +31,9 @@ def register_recruiter(data: RecruiterRegister, db=Depends(get_db)):
 
     new_user = models.UserDB(name=data.name, email=data.email, password=hash_password(data.password), role="recruiter")
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    # Flush to get new_user.id without committing; profile is added in the same
+    # transaction so a failure in either insert leaves no orphaned records.
+    db.flush()
 
     profile = models.RecruiterProfile(
         user_id=new_user.id,
@@ -42,6 +43,7 @@ def register_recruiter(data: RecruiterRegister, db=Depends(get_db)):
     )
     db.add(profile)
     db.commit()
+    db.refresh(new_user)
     log_audit(db, "recruiter.register", actor_id=new_user.id, target_type="recruiter_profile", target_id=profile.id, detail=f"company={profile.company_name}")
     return {"message": "Recruiter registered successfully. Awaiting admin approval."}
 

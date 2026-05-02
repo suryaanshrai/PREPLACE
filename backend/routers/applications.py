@@ -1,7 +1,7 @@
 from datetime import datetime
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 import models
@@ -38,14 +38,12 @@ def _require_applicant(user: dict = Depends(get_current_user)) -> dict:
 
 
 @router.post("/applications", tags=["Applications"])
-def create_or_update_application(user_id: int, payload: ApplicationCreate, db=Depends(get_db)):
-    user = get_user_or_404(db, user_id)
-    if user.role != "applicant":
-        return {"error": "Only applicants can apply"}
+def create_or_update_application(applicant: dict = Depends(_require_applicant), payload: ApplicationCreate = Body(...), db=Depends(get_db)):
+    user_id = applicant["user_id"]
 
     job = db.query(models.JobListing).filter(models.JobListing.id == payload.job_listing_id).first()
     if not job or job.status != "active":
-        return {"error": "Job is unavailable"}
+        raise HTTPException(status_code=404, detail="Job is unavailable")
 
     selected_resume = None
     if payload.resume_id is not None:
@@ -55,12 +53,12 @@ def create_or_update_application(user_id: int, payload: ApplicationCreate, db=De
             .first()
         )
         if not selected_resume:
-            return {"error": "Selected resume not found"}
+            raise HTTPException(status_code=404, detail="Selected resume not found")
     else:
         selected_resume = get_latest_resume(db, user_id)
 
     if not selected_resume:
-        return {"error": "Upload at least one resume before applying"}
+        raise HTTPException(status_code=400, detail="Upload at least one resume before applying")
 
     new_status = normalize_app_status(payload.action)
     app_record = (
