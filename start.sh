@@ -71,54 +71,111 @@ echo -e "${MAGENTA}════════════════════�
 # ── 0. Preflight checks ───────────────────────────────────────────────────
 step "Checking prerequisites..."
 
-command -v docker &>/dev/null || abort "Docker not found. Install it from https://docs.docker.com/get-docker/"
-docker info &>/dev/null       || abort "Docker daemon is not running. Start Docker and try again."
-
 [[ -f "$VENV_PYTHON" ]] || abort "Python venv not found at '$VENV_PYTHON'.\n  Create it: python3 -m venv backend/.venv\n  Install deps: backend/.venv/bin/pip install -r backend/requirements.txt"
 
 command -v npm &>/dev/null || abort "npm not found. Install Node.js from https://nodejs.org"
 
-ok "All prerequisites met."
-
-# ── 1. PostgreSQL via Docker ──────────────────────────────────────────────
-step "Setting up PostgreSQL container '$CONTAINER_NAME' on port 5433..."
-
-if docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
-    if docker ps --filter "name=^/${CONTAINER_NAME}$" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
-        ok "Container is already running."
-    else
-        echo "  Starting existing container..." 
-        docker start "$CONTAINER_NAME" >/dev/null
-        ok "Container started."
-    fi
+# Detect whether Docker is usable
+USE_DOCKER=0
+if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+    USE_DOCKER=1
+    ok "Docker detected — will use a Docker container for PostgreSQL."
 else
-    echo "  Creating new container..."
-    docker run -d \
-        --name "$CONTAINER_NAME" \
-        -e POSTGRES_USER=preplace_user \
-        -e POSTGRES_PASSWORD=preplace_pass \
-        -e POSTGRES_DB=preplac \
-        -p 5433:5432 \
-        --restart unless-stopped \
-        postgres:16 >/dev/null
-    ok "Container created and started."
+    warn "Docker not found or not running — looking for a local PostgreSQL installation..."
+    command -v pg_isready &>/dev/null || abort "Neither Docker nor a local PostgreSQL installation was found.\n  Install Docker: https://docs.docker.com/get-docker/\n  or PostgreSQL: https://www.postgresql.org/download/"
+    ok "Local PostgreSQL found."
 fi
 
-# Wait for PostgreSQL to accept connections (up to 45 seconds)
-echo "  Waiting for PostgreSQL to accept connections..."
-ready=0
-for i in $(seq 1 45); do
-    if docker exec "$CONTAINER_NAME" pg_isready -U preplace_user -d preplac -q 2>/dev/null; then
-        ready=1
-        break
-    fi
-    printf "  ...[$i/45]\r"
-    sleep 1
-done
-printf "\033[K"  # clear the progress line
+ok "All prerequisites met."
 
-[[ $ready -eq 1 ]] || abort "PostgreSQL did not become ready in 45 seconds.\n  Check logs: docker logs $CONTAINER_NAME"
-ok "PostgreSQL is ready."
+# ── 1. PostgreSQL setup ───────────────────────────────────────────────────
+# Shared connection defaults (can be overridden via env before running the script)
+DB_HOST="${PGHOST:-localhost}"
+DB_USER="${PGUSER:-preplace_user}"
+DB_PASS="${PGPASSWORD:-preplace_pass}"
+DB_NAME="${PGDATABASE:-preplac}"
+
+if [[ "$USE_DOCKER" -eq 1 ]]; then
+    DB_PORT="${PGPORT:-5433}"
+    step "Setting up PostgreSQL container '$CONTAINER_NAME' on port $DB_PORT..."
+
+    if docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+        if docker ps --filter "name=^/${CONTAINER_NAME}$" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+            ok "Container is already running."
+        else
+            echo "  Starting existing container..."
+            docker start "$CONTAINER_NAME" >/dev/null
+            ok "Container started."
+        fi
+    else
+        echo "  Creating new container..."
+        docker run -d \
+            --name "$CONTAINER_NAME" \
+            -e POSTGRES_USER="$DB_USER" \
+            -e POSTGRES_PASSWORD="$DB_PASS" \
+            -e POSTGRES_DB="$DB_NAME" \
+            -p "${DB_PORT}:5432" \
+            --restart unless-stopped \
+            postgres:16 >/dev/null
+        ok "Container created and started."
+    fi
+
+    # Wait for PostgreSQL to accept connections (up to 45 seconds)
+    echo "  Waiting for PostgreSQL to accept connections..."
+    ready=0
+    for i in $(seq 1 45); do
+        if docker exec "$CONTAINER_NAME" pg_isready -U "$DB_USER" -d "$DB_NAME" -q 2>/dev/null; then
+            ready=1
+            break
+        fi
+        printf "  ...[$i/45]\r"
+        sleep 1
+    done
+    printf "\033[K"
+
+    [[ $ready -eq 1 ]] || abort "PostgreSQL did not become ready in 45 seconds.\n  Check logs: docker logs $CONTAINER_NAME"
+    ok "PostgreSQL is ready."
+
+else
+    DB_PORT="${PGPORT:-5432}"
+    step "Using local PostgreSQL on ${DB_HOST}:${DB_PORT}..."
+
+    # Wait for PostgreSQL to accept connections (up to 15 seconds)
+    echo "  Waiting for PostgreSQL to accept connections..."
+    ready=0
+    for i in $(seq 1 15); do
+        if PGPASSWORD="$DB_PASS" pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -q 2>/dev/null; then
+            ready=1
+            break
+        fi
+        printf "  ...[$i/15]\r"
+        sleep 1
+    done
+    printf "\033[K"
+
+    if [[ $ready -eq 0 ]]; then
+        # Database or user may not exist yet — try to create them with the superuser
+        warn "Could not connect as '$DB_USER'. Attempting to create the database/role (you may be prompted for the postgres superuser password)..."
+        createuser  --superuser "$DB_USER" 2>/dev/null || true
+        psql -U postgres -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || true
+        createdb -O "$DB_USER" "$DB_NAME" 2>/dev/null || true
+
+        # Retry connection
+        for i in $(seq 1 10); do
+            if PGPASSWORD="$DB_PASS" pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -q 2>/dev/null; then
+                ready=1
+                break
+            fi
+            sleep 1
+        done
+    fi
+
+    [[ $ready -eq 1 ]] || abort "Could not connect to local PostgreSQL at ${DB_HOST}:${DB_PORT} as '${DB_USER}'.\n  Make sure PostgreSQL is running and the credentials are correct.\n  You can override them with: PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE"
+    ok "Local PostgreSQL is ready."
+fi
+
+# Export DATABASE_URL so the backend picks it up automatically
+export DATABASE_URL="postgresql+psycopg2://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 
 # ── 2. Seed demo data ─────────────────────────────────────────────────────
 step "Seeding demo data (idempotent — safe to re-run)..."
@@ -170,6 +227,7 @@ echo -e "  ${BOLD}Services${RESET}"
 echo    "    Frontend   http://localhost:5173"
 echo    "    Backend    http://localhost:8000"
 echo    "    API Docs   http://localhost:8000/docs"
+echo    "    Database   ${DB_HOST}:${DB_PORT}/${DB_NAME}"
 echo ""
 echo -e "  ${BOLD}Demo credentials${RESET}"
 echo    "    Admin      admin@preplace.smvdu  /  admin@123"
