@@ -191,7 +191,7 @@ function ApplicantModal({ active, onClose, showToast }) {
       const data = await resp.json()
       if (data.error) { setError(data.error); setLoading(false); return }
 
-      localStorage.setItem('user', JSON.stringify(data.user))
+      localStorage.setItem('user', JSON.stringify({ ...data.user, auth_token: data.auth_token }))
       localStorage.setItem('preplace_user', JSON.stringify({
         name: data.user.name,
         email: data.user.email || loginEmail,
@@ -332,7 +332,7 @@ function RecruiterModal({ active, onClose, showToast }) {
       const data = await resp.json()
       if (data.error) { setError(data.error); setLoading(false); return }
       if (data.user.role !== 'recruiter') { setError('This is not a recruiter account.'); setLoading(false); return }
-      localStorage.setItem('user', JSON.stringify(data.user))
+      localStorage.setItem('user', JSON.stringify({ ...data.user, auth_token: data.auth_token }))
       onClose()
       showToast('✅ Welcome back! Redirecting…', '#4d9fff')
       setTimeout(() => navigate('/recruiter-dashboard'), 400)
@@ -436,7 +436,7 @@ function AdminModal({ active, onClose, showToast }) {
       const data = await resp.json()
       if (data.error) { setError(data.error); setLoading(false); return }
       if (data.user.role !== 'admin') { setError('This is not an admin account.'); setLoading(false); return }
-      localStorage.setItem('user', JSON.stringify(data.user))
+      localStorage.setItem('user', JSON.stringify({ ...data.user, auth_token: data.auth_token }))
       onClose()
       showToast('✅ Admin access granted!', '#c8960c')
       setTimeout(() => navigate('/admin-dashboard'), 400)

@@ -1,6 +1,6 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Orbs, Toast, useToast, getApiUrl } from './Shared'
+import { Orbs, Toast, useToast, getApiUrl, authFetch } from './Shared'
 
 export default function AdminDashboard() {
   const navigate = useNavigate()
@@ -18,7 +18,7 @@ export default function AdminDashboard() {
 
   function refreshStats() {
     const apiUrl = getApiUrl()
-    fetch(`${apiUrl}/admin/stats`).then(r => r.json()).then(setStats).catch(() => {})
+    authFetch(`${apiUrl}/admin/stats`).then(r => r.json()).then(setStats).catch(() => {})
   }
 
   React.useEffect(() => { refreshStats() }, []) 
@@ -101,7 +101,7 @@ function ScoringTemplatesPanel({ showToast }) {
   function loadTemplates() {
     const apiUrl = getApiUrl()
     setLoading(true)
-    fetch(`${apiUrl}/admin/scoring-templates`)
+    authFetch(`${apiUrl}/admin/scoring-templates`)
       .then(r => r.json())
       .then(data => { setTemplates(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -115,7 +115,7 @@ function ScoringTemplatesPanel({ showToast }) {
       return
     }
     const apiUrl = getApiUrl()
-    const resp = await fetch(`${apiUrl}/admin/scoring-templates`, {
+    const resp = await authFetch(`${apiUrl}/admin/scoring-templates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form),
@@ -132,7 +132,7 @@ function ScoringTemplatesPanel({ showToast }) {
 
   async function toggleTemplate(template) {
     const apiUrl = getApiUrl()
-    await fetch(`${apiUrl}/admin/scoring-templates/${template.id}`, {
+    await authFetch(`${apiUrl}/admin/scoring-templates/${template.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: !template.is_active }),
@@ -142,7 +142,7 @@ function ScoringTemplatesPanel({ showToast }) {
 
   async function deleteTemplate(templateId) {
     const apiUrl = getApiUrl()
-    await fetch(`${apiUrl}/admin/scoring-templates/${templateId}`, { method: 'DELETE' })
+    await authFetch(`${apiUrl}/admin/scoring-templates/${templateId}`, { method: 'DELETE' })
     loadTemplates()
   }
 
@@ -185,7 +185,7 @@ function PenaltyDefaultsPanel({ showToast }) {
   function loadRules() {
     const apiUrl = getApiUrl()
     setLoading(true)
-    fetch(`${apiUrl}/admin/penalty-defaults`)
+    authFetch(`${apiUrl}/admin/penalty-defaults`)
       .then(r => r.json())
       .then(data => {
         const list = Array.isArray(data?.rules) ? data.rules : []
@@ -225,7 +225,7 @@ function PenaltyDefaultsPanel({ showToast }) {
         })),
     }
     const apiUrl = getApiUrl()
-    const resp = await fetch(`${apiUrl}/admin/penalty-defaults`, {
+    const resp = await authFetch(`${apiUrl}/admin/penalty-defaults`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -330,7 +330,7 @@ function AuditLogsPanel() {
     const params = new URLSearchParams({ limit: '120' })
     if (nextAction.trim()) params.set('action', nextAction.trim())
     setLoading(true)
-    fetch(`${apiUrl}/admin/audit-logs?${params.toString()}`)
+    authFetch(`${apiUrl}/admin/audit-logs?${params.toString()}`)
       .then(r => r.json())
       .then(data => { setLogs(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -379,7 +379,7 @@ function RecruitersPanel({ showToast, onUpdate }) {
   const apiUrl = getApiUrl()
 
   function fetchRecruiters() {
-    fetch(`${apiUrl}/admin/recruiters`)
+    authFetch(`${apiUrl}/admin/recruiters`)
       .then(r => r.json())
       .then(data => { setRecruiters(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -388,7 +388,7 @@ function RecruitersPanel({ showToast, onUpdate }) {
   React.useEffect(() => { fetchRecruiters() }, [])
 
   async function updateStatus(userId, status) {
-    await fetch(`${apiUrl}/admin/recruiters/${userId}/status?status=${status}`, { method: 'PATCH' })
+    await authFetch(`${apiUrl}/admin/recruiters/${userId}/status?status=${status}`, { method: 'PATCH' })
     showToast(`✅ Recruiter ${status}!`, status === 'approved' ? 'var(--accent)' : 'var(--accent3)')
     fetchRecruiters()
     onUpdate()
@@ -396,7 +396,7 @@ function RecruitersPanel({ showToast, onUpdate }) {
 
   async function deleteRecruiter(userId, name) {
     if (!confirm(`Delete recruiter "${name}" and all their listings?`)) return
-    await fetch(`${apiUrl}/admin/recruiters/${userId}`, { method: 'DELETE' })
+    await authFetch(`${apiUrl}/admin/recruiters/${userId}`, { method: 'DELETE' })
     showToast(`🗑️ ${name} deleted.`, 'var(--accent3)')
     fetchRecruiters()
     onUpdate()
@@ -484,7 +484,7 @@ function JobListingsPanel({ showToast, onUpdate }) {
   const apiUrl = getApiUrl()
 
   function fetchListings() {
-    fetch(`${apiUrl}/admin/job-listings`)
+    authFetch(`${apiUrl}/admin/job-listings`)
       .then(r => r.json())
       .then(data => { setListings(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -493,7 +493,7 @@ function JobListingsPanel({ showToast, onUpdate }) {
   React.useEffect(() => { fetchListings() }, [])
 
   async function updateStatus(listingId, status) {
-    await fetch(`${apiUrl}/admin/job-listings/${listingId}/status?status=${status}`, { method: 'PATCH' })
+    await authFetch(`${apiUrl}/admin/job-listings/${listingId}/status?status=${status}`, { method: 'PATCH' })
     const label = status === 'active' ? 'approved' : status
     showToast(`✅ Job listing ${label}!`, status === 'active' ? 'var(--accent)' : 'var(--accent3)')
     fetchListings()

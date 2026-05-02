@@ -1,6 +1,6 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Orbs, Toast, useToast, getApiUrl, renderMarkdown } from './Shared'
+import { Orbs, Toast, useToast, getApiUrl, renderMarkdown, authFetch } from './Shared'
 
 /* ═══════ RECRUITER DASHBOARD ═══════ */
 export default function RecruiterDashboard() {
@@ -244,7 +244,7 @@ function RecruiterAnalyticsPanel({ userId }) {
   React.useEffect(() => {
     const apiUrl = getApiUrl()
     if (!userId) { setLoading(false); return }
-    fetch(`${apiUrl}/analytics/recruiter-overview?recruiter_id=${userId}`)
+    authFetch(`${apiUrl}/analytics/recruiter-overview?recruiter_id=${userId}`)
       .then(r => r.json())
       .then(data => { setAnalytics(data || null); setLoading(false) })
       .catch(() => setLoading(false))
@@ -343,7 +343,7 @@ function ApplicantsPanel({ showToast }) {
     if (search.trim()) params.set('q', search.trim())
     if (selectedListing) params.set('listing_id', selectedListing)
     setLoading(true)
-    fetch(`${apiUrl}/recruiter/applications?${params.toString()}`)
+    authFetch(`${apiUrl}/recruiter/applications?${params.toString()}`)
       .then(r => r.json())
       .then(data => { setApplications(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -359,7 +359,7 @@ function ApplicantsPanel({ showToast }) {
 
   async function updateStatus(applicationId, status) {
     const apiUrl = getApiUrl()
-    const resp = await fetch(`${apiUrl}/applications/${applicationId}/status?recruiter_id=${user.id}`, {
+    const resp = await authFetch(`${apiUrl}/applications/${applicationId}/status?recruiter_id=${user.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
@@ -375,7 +375,7 @@ function ApplicantsPanel({ showToast }) {
 
   async function saveNote(applicationId, recruiter_note) {
     const apiUrl = getApiUrl()
-    const resp = await fetch(`${apiUrl}/applications/${applicationId}/note?recruiter_id=${user.id}`, {
+    const resp = await authFetch(`${apiUrl}/applications/${applicationId}/note?recruiter_id=${user.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ recruiter_note }),
@@ -494,7 +494,12 @@ function ApplicantsPanel({ showToast }) {
                     showToast('Resume file is unavailable for this application.', 'var(--accent3)')
                     return
                   }
-                  window.open(`${apiUrl}${modalApp.resume_download_url}`, '_blank', 'noopener,noreferrer')
+                  const rawPath = modalApp.resume_download_url
+                  if (!rawPath.startsWith('/') || rawPath.includes('://')) {
+                    showToast('Invalid download URL.', 'var(--accent3)')
+                    return
+                  }
+                  window.open(`${apiUrl}${rawPath}`, '_blank', 'noopener,noreferrer')
                 }}>⬇ Download Resume</button>
               <button style={{ flex: 1, padding: '0.75rem', background: 'rgba(255,92,135,0.08)', border: '1px solid rgba(255,92,135,0.2)', borderRadius: 10, color: 'var(--accent3)', fontFamily: "'Syne', sans-serif", fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}
                 onClick={() => { updateStatus(modalApp.id, 'rejected'); setModalApp(null) }}>✕ Reject</button>

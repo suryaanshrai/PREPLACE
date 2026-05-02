@@ -70,6 +70,18 @@ export function getApiUrl() {
   }
 }
 
+export function authFetch(url, options = {}) {
+  try {
+    const stored = localStorage.getItem('user')
+    const token = stored ? JSON.parse(stored).auth_token : null
+    const headers = { ...(options.headers || {}) }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    return fetch(url, { ...options, headers })
+  } catch {
+    return fetch(url, options)
+  }
+}
+
 export function getScoreColor(score) {
   if (score >= 80) return 'var(--accent)'
   if (score >= 65) return '#f0b429'

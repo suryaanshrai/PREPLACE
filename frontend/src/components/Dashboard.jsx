@@ -1,6 +1,6 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Orbs, NirfBar, Toast, useToast, getApiUrl, getScoreColor, getGrade, parseAnalysis } from './Shared'
+import { Orbs, NirfBar, Toast, useToast, getApiUrl, getScoreColor, getGrade, parseAnalysis, authFetch } from './Shared'
 
 /* ═══════ CONSTANTS ═══════ */
 const LOADER_STEPS = [
@@ -31,6 +31,14 @@ function ConfigModal({ active, onClose, showToast }) {
   function save() {
     const cleanUrl = url.trim().replace(/\/$/, '')
     if (!cleanUrl) { showToast('Please enter the backend URL', 'var(--accent3)'); return }
+    try {
+      const urlObj = new URL(cleanUrl)
+      if (!['http:', 'https:'].includes(urlObj.protocol)) {
+        showToast('URL must use http or https', 'var(--accent3)'); return
+      }
+    } catch {
+      showToast('Invalid URL format', 'var(--accent3)'); return
+    }
     localStorage.setItem('preplace_config', JSON.stringify({ apiUrl: cleanUrl, userId: uid || '1' }))
     onClose()
     showToast('✅ Config saved!', 'var(--accent)')
@@ -74,6 +82,10 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
   const fileInputRef = React.useRef(null)
   const stepTimerRef = React.useRef(null)
   const dropdownRef = React.useRef(null)
+
+  React.useEffect(() => {
+    return () => clearInterval(stepTimerRef.current)
+  }, [])
 
   React.useEffect(() => {
     function handleOutsideClick(e) {
@@ -405,19 +417,19 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
             <div className="feed-card s">
               <div className="feed-title"><div className="feed-title-dot"></div>Strong Points</div>
               <ul className="feed-list">
-                {result.strengths.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
+                {(result.strengths ?? []).slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </div>
             <div className="feed-card w">
               <div className="feed-title"><div className="feed-title-dot"></div>Improvements</div>
               <ul className="feed-list">
-                {result.improvements.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
+                {(result.improvements ?? []).slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </div>
             <div className="feed-card sg">
               <div className="feed-title"><div className="feed-title-dot"></div>Quick Tips</div>
               <ul className="feed-list">
-                {result.tips.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
+                {(result.tips ?? []).slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </div>
           </div>
@@ -536,7 +548,7 @@ function JobMatchings({ showToast }) {
 
   async function loadJobs() {
     const apiUrl = getApiUrl()
-    if (!user.id) { setLoading(false); return }
+    if (!user.id) { setJobs([]); setLoading(false); return }
     const params = new URLSearchParams({ user_id: String(user.id), sort_by: sortBy })
     if (query.trim()) params.set('q', query.trim())
     const deptFilter = {
@@ -559,7 +571,7 @@ function JobMatchings({ showToast }) {
 
   async function saveOrApply(jobId, action) {
     const apiUrl = getApiUrl()
-    const resp = await fetch(`${apiUrl}/applications?user_id=${user.id}`, {
+    const resp = await authFetch(`${apiUrl}/applications`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ job_listing_id: jobId, action }),

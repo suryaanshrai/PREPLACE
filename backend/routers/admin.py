@@ -162,7 +162,12 @@ def admin_stats(admin: dict = Depends(_require_admin), db=Depends(get_db)):
 
 
 @router.get("/analytics/recruiter-overview", tags=["Analytics"])
-def recruiter_analytics(recruiter_id: int, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+def recruiter_analytics(recruiter_id: int, user: dict = Depends(get_current_user), db=Depends(get_db)):
+    # Allow admins to view any recruiter's analytics, or a recruiter to view their own.
+    caller_role = user.get("role")
+    caller_id = user.get("user_id")
+    if caller_role != "admin" and not (caller_role == "recruiter" and caller_id == recruiter_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     listings = db.query(models.JobListing).filter(models.JobListing.recruiter_id == recruiter_id).all()
     listing_ids = [l.id for l in listings]
     if not listing_ids:

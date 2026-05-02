@@ -1,6 +1,6 @@
 import React from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Orbs, NirfBar, Toast, useToast, getApiUrl, renderMarkdown } from './Shared'
+import { Orbs, NirfBar, Toast, useToast, getApiUrl, renderMarkdown, authFetch } from './Shared'
 
 function matchColor(m) { return m >= 80 ? 'var(--accent)' : m >= 65 ? '#f0b429' : 'var(--accent3)' }
 
@@ -75,7 +75,7 @@ export default function JobDetailsPage() {
     setSubmitting(true)
     const apiUrl = getApiUrl()
     try {
-      const resp = await fetch(`${apiUrl}/applications?user_id=${user.id}`, {
+      const resp = await authFetch(`${apiUrl}/applications`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
