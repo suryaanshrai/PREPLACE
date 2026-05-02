@@ -46,7 +46,9 @@ if (params.experienceLevel) queryOptions.experienceLevel = params.experienceLeve
 linkedIn.query(queryOptions)
   .then(jobs => {
     process.stdout.write(JSON.stringify({ jobs: jobs || [], search_params: queryOptions }));
+    process.exit(0);
   })
   .catch(err => {
     process.stdout.write(JSON.stringify({ error: err.message || 'LinkedIn query failed', jobs: [] }));
+    process.exit(0);
   });

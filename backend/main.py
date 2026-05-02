@@ -1,11 +1,5 @@
 from contextlib import asynccontextmanager
-import logging
 import os
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,6 +72,7 @@ def ensure_schema_updates() -> None:
             CONSTRAINT unique_penalty_scope_category UNIQUE (recruiter_id, listing_id, category)
         )
         """,
+        "ALTER TABLE penalty_rules DROP CONSTRAINT IF EXISTS unique_penalty_scope_category",
         "CREATE INDEX IF NOT EXISTS idx_penalty_rules_recruiter_listing ON penalty_rules(recruiter_id, listing_id)",
         """
         UPDATE applications a
@@ -177,10 +172,28 @@ def seed_scoring_defaults() -> None:
                 "title": "Software Development Engineer (Intern)",
                 "role_title": "SDE Intern",
                 "description": (
-                    "Build and maintain backend APIs and product features using Python, FastAPI, or Django with PostgreSQL and Redis. "
-                    "Write clean, well-tested code, participate in code reviews, and contribute to CI/CD workflows using Docker and Git. "
-                    "Collaborate with senior engineers on system design, debugging, and performance optimization. "
-                    "Experience with REST APIs, object-oriented programming, and basic cloud tools (AWS/GCP) is a plus."
+                    "**About the Role**\n\n"
+                    "A 6-month engineering internship working on real production systems — not toy projects. "
+                    "You'll ship features end-to-end alongside senior engineers and be expected to take ownership of what you build.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Build and maintain backend API endpoints using Python (FastAPI or Django)\n"
+                    "- Write clean, tested code using pytest; follow Git and GitHub PR workflows\n"
+                    "- Work with PostgreSQL databases — write queries, design schemas, run migrations\n"
+                    "- Build and integrate REST endpoints; participate in peer code reviews\n"
+                    "- Implement basic authentication and session handling using JWT\n"
+                    "- Gain hands-on exposure to Docker for local development and service containerisation\n"
+                    "- Deploy services to AWS or GCP staging environments\n\n"
+                    "**Requirements**\n\n"
+                    "- Proficiency in Python — you write clean, maintainable code, not just scripts\n"
+                    "- Solid understanding of data structures, algorithms, and REST principles\n"
+                    "- Familiarity with Git and collaborative development workflows\n"
+                    "- Basic SQL knowledge — SELECT, JOIN, GROUP BY, subqueries\n"
+                    "- Enrolled in or recently completed a CS or related degree\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Exposure to Docker or containerised development\n"
+                    "- Familiarity with PostgreSQL or any relational database\n"
+                    "- Basic understanding of CI/CD and automated testing\n"
+                    "- Any prior internship or open-source contribution"
                 ),
                 "category": "Engineering",
             },
@@ -188,10 +201,29 @@ def seed_scoring_defaults() -> None:
                 "title": "Data Analyst (Entry)",
                 "role_title": "Data Analyst",
                 "description": (
-                    "Analyze large structured and unstructured datasets to generate actionable business insights using Python, Pandas, and SQL. "
-                    "Build and maintain dashboards and reports in Tableau, Power BI, or Looker. "
-                    "Collaborate with product and engineering teams to define KPIs and support data-driven decision-making. "
-                    "Experience with data cleaning, A/B testing, statistical analysis, and Excel or Google Sheets is expected."
+                    "**About the Role**\n\n"
+                    "We're looking for a Data Analyst who is equally comfortable writing complex SQL and "
+                    "explaining a trend to a non-technical stakeholder. You'll work directly with business "
+                    "teams to turn raw data into decisions.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Write advanced SQL queries (CTEs, window functions, multi-table joins) against PostgreSQL and MySQL\n"
+                    "- Build and maintain interactive dashboards in Tableau and Power BI for business stakeholders\n"
+                    "- Use Python (Pandas, NumPy) for exploratory data analysis and automating recurring reports\n"
+                    "- Perform ETL pipeline work using Airflow or dbt; validate and clean data at ingestion\n"
+                    "- Conduct statistical analysis and surface actionable business insights\n"
+                    "- Work with Spark/PySpark for large-scale data processing tasks\n"
+                    "- Present findings clearly with supporting visualisations and written commentary\n\n"
+                    "**Requirements**\n\n"
+                    "- Strong SQL skills — window functions, subqueries, and query optimisation\n"
+                    "- Hands-on Python experience for data analysis (Pandas, NumPy)\n"
+                    "- Experience building dashboards in Tableau or Power BI\n"
+                    "- Proficiency with Excel including VLOOKUP, Pivot Tables, and advanced formulas\n"
+                    "- Strong communication skills — able to translate data into business language\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with a cloud data warehouse (BigQuery, Redshift, or Snowflake)\n"
+                    "- Familiarity with dbt or similar data transformation tools\n"
+                    "- Exposure to A/B testing and statistical significance frameworks\n"
+                    "- Degree in Computer Science, Statistics, Mathematics, or related field"
                 ),
                 "category": "Data",
             },
@@ -199,10 +231,29 @@ def seed_scoring_defaults() -> None:
                 "title": "Frontend Developer (React)",
                 "role_title": "Frontend Developer",
                 "description": (
-                    "Build performant, accessible, and responsive web interfaces using React, TypeScript, and CSS. "
-                    "Consume REST and GraphQL APIs, manage application state, and write unit and integration tests. "
-                    "Collaborate with designers to translate Figma mockups into pixel-perfect components. "
-                    "Experience with Vite or Webpack, component libraries, and web performance optimization is preferred."
+                    "**About the Role**\n\n"
+                    "We're hiring a Frontend Developer to own the user-facing layer of our product. "
+                    "You'll work in a cross-functional squad alongside backend engineers and designers "
+                    "to deliver fast, polished, and accessible web experiences.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Develop and maintain responsive web interfaces using React and TypeScript\n"
+                    "- Build reusable, performant component libraries and design system primitives\n"
+                    "- Translate Figma designs into high-quality, pixel-accurate code\n"
+                    "- Consume RESTful and GraphQL APIs; manage client-side state (Redux or Context API)\n"
+                    "- Optimise frontend performance — lazy loading, code splitting, bundle size\n"
+                    "- Write unit and integration tests using Jest and Cypress\n"
+                    "- Ensure cross-browser and cross-device compatibility\n\n"
+                    "**Requirements**\n\n"
+                    "- Strong proficiency in React.js and its core principles (hooks, lifecycle, reconciliation)\n"
+                    "- Solid TypeScript skills — type-safe code without fighting the compiler\n"
+                    "- Good understanding of HTML5, CSS3, and responsive design\n"
+                    "- Experience consuming REST APIs and handling async data flows\n"
+                    "- Familiarity with Git, PR workflows, and agile development\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with Next.js or SSR/SSG patterns\n"
+                    "- Familiarity with Vue or Angular\n"
+                    "- Exposure to micro-frontend architecture or design systems\n"
+                    "- Understanding of web accessibility (WCAG) standards"
                 ),
                 "category": "Engineering",
             },
@@ -210,10 +261,28 @@ def seed_scoring_defaults() -> None:
                 "title": "Backend Developer (Node/Python)",
                 "role_title": "Backend Developer",
                 "description": (
-                    "Design, build, and maintain scalable server-side services, RESTful APIs, and microservices using Python (Django, FastAPI, Flask) or Node.js (Express). "
-                    "Manage relational and NoSQL databases including PostgreSQL, MySQL, MongoDB, and Redis. "
-                    "Implement authentication, authorization, and security best practices; deploy services using Docker, Kubernetes, and cloud platforms (AWS, GCP). "
-                    "Write automated tests, participate in code reviews, and contribute to CI/CD pipelines and system architecture decisions."
+                    "**About the Role**\n\n"
+                    "We're hiring a Backend Developer to design, build, and scale the services that power our core platform. "
+                    "You'll own APIs and microservices end-to-end — from architecture decisions to production reliability.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Design and build scalable RESTful APIs using Python (FastAPI/Django/Flask) or Node.js (Express/NestJS)\n"
+                    "- Architect microservices and distributed systems; integrate PostgreSQL and MySQL for relational storage\n"
+                    "- Use Redis or MongoDB for caching and flexible data models\n"
+                    "- Containerise workloads with Docker; deploy via Kubernetes with CI/CD pipelines on AWS or GCP\n"
+                    "- Implement authentication and authorisation using OAuth 2.0 and JWT\n"
+                    "- Write comprehensive tests with pytest or Jest; enforce quality through code reviews\n"
+                    "- Participate in architecture discussions and contribute to technical roadmap decisions\n\n"
+                    "**Requirements**\n\n"
+                    "- 1–3 years of hands-on backend development experience\n"
+                    "- Strong Python or Node.js skills with production API development experience\n"
+                    "- Solid experience with PostgreSQL and SQL query optimisation\n"
+                    "- Understanding of distributed systems, async processing, and microservices patterns\n"
+                    "- Familiarity with Docker and CI/CD workflows\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with Kubernetes or container orchestration\n"
+                    "- Exposure to message brokers (Kafka, RabbitMQ, Redis Streams)\n"
+                    "- Infrastructure-as-code experience (Terraform/Pulumi)\n"
+                    "- Prior work with high-traffic, low-latency production systems"
                 ),
                 "category": "Engineering",
             },
@@ -221,10 +290,28 @@ def seed_scoring_defaults() -> None:
                 "title": "Full Stack Developer",
                 "role_title": "Full Stack Developer",
                 "description": (
-                    "Develop end-to-end web applications covering both React or Vue frontend interfaces and Python or Node.js backend services. "
-                    "Design and integrate REST or GraphQL APIs, manage PostgreSQL or MongoDB databases, and handle authentication flows. "
-                    "Deploy applications using Docker, cloud platforms (AWS/GCP/Azure), and CI/CD pipelines. "
-                    "Solid understanding of software architecture, testing, and agile collaboration is required."
+                    "**About the Role**\n\n"
+                    "We're looking for a Full Stack Developer who is comfortable owning features from database schema "
+                    "to React component — someone who doesn't wait to be handed a ticket and prefers to ship.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Build end-to-end web application features using React/Next.js on the frontend and FastAPI/Django on the backend\n"
+                    "- Design and query PostgreSQL and MongoDB databases; implement caching with Redis\n"
+                    "- Build and consume GraphQL and REST APIs; implement OAuth 2.0 and JWT authentication\n"
+                    "- Deploy services using Docker and CI/CD pipelines on AWS\n"
+                    "- Write automated tests with pytest and Jest; maintain high code coverage\n"
+                    "- Participate in system design discussions and help define technical architecture\n"
+                    "- Review and mentor peers through PR review processes\n\n"
+                    "**Requirements**\n\n"
+                    "- 1–3 years of full-stack development experience\n"
+                    "- Proficiency in React (hooks, state management) and Python or Node.js for backend\n"
+                    "- Solid SQL skills and experience with relational database design\n"
+                    "- Working knowledge of REST API design principles\n"
+                    "- Comfortable with Docker, Git, and collaborative development workflows\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with Next.js or SSR patterns\n"
+                    "- Familiarity with GraphQL\n"
+                    "- Exposure to cloud platforms (AWS, GCP, or Azure)\n"
+                    "- Prior experience in a startup or high-ownership environment"
                 ),
                 "category": "Engineering",
             },
@@ -232,10 +319,28 @@ def seed_scoring_defaults() -> None:
                 "title": "Machine Learning Engineer",
                 "role_title": "ML Engineer",
                 "description": (
-                    "Build, train, evaluate, and deploy machine learning and deep learning models using Python, PyTorch, TensorFlow, or scikit-learn. "
-                    "Develop data pipelines, feature engineering workflows, and model monitoring systems using tools like MLflow, Airflow, or Kubeflow. "
-                    "Collaborate with data scientists and engineers to productionize models as REST APIs or batch inference jobs. "
-                    "Experience with NLP, computer vision, LLMs, RAG pipelines, or recommendation systems is a strong advantage."
+                    "**About the Role**\n\n"
+                    "We are building intelligent systems and need an ML Engineer who can take models from research "
+                    "to production. You'll work across the full ML lifecycle — data, training, evaluation, deployment, and monitoring.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Build, train, and deploy ML and deep learning models using Python, PyTorch, TensorFlow, and scikit-learn\n"
+                    "- Work with LLMs, RAG pipelines, and embeddings using LangChain, LlamaIndex, and HuggingFace Transformers\n"
+                    "- Design and maintain MLOps infrastructure; orchestrate data workflows with Airflow\n"
+                    "- Implement classification, regression, clustering, and anomaly detection algorithms\n"
+                    "- Apply NLP, computer vision, and generative AI techniques to real product problems\n"
+                    "- Deploy models to production on AWS or GCP; use Docker for reproducible environments\n"
+                    "- Track and document experiments rigorously; ensure reproducibility across runs\n\n"
+                    "**Requirements**\n\n"
+                    "- Strong Python skills with hands-on ML model development experience\n"
+                    "- Proficiency in PyTorch or TensorFlow and scikit-learn\n"
+                    "- Solid understanding of ML fundamentals — bias/variance, cross-validation, evaluation metrics\n"
+                    "- Experience with Pandas and NumPy for data processing\n"
+                    "- Familiarity with SQL for data querying and feature extraction\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with LLMs, RAG, or vector databases (Pinecone, Weaviate, Chroma)\n"
+                    "- Familiarity with MLflow or experiment tracking tools\n"
+                    "- Exposure to Spark and distributed training\n"
+                    "- Cloud ML platform experience (AWS SageMaker, GCP Vertex AI)"
                 ),
                 "category": "Data/AI",
             },
@@ -243,10 +348,28 @@ def seed_scoring_defaults() -> None:
                 "title": "DevOps / Cloud Engineer",
                 "role_title": "DevOps Engineer",
                 "description": (
-                    "Manage and optimize CI/CD pipelines using GitHub Actions, Jenkins, or GitLab CI; containerize applications with Docker and orchestrate with Kubernetes. "
-                    "Provision and maintain cloud infrastructure on AWS, GCP, or Azure using Terraform or Ansible. "
-                    "Monitor system reliability with tools like Prometheus, Grafana, and ELK; implement incident response and on-call workflows. "
-                    "Strong experience with Linux administration, networking, security hardening, and infrastructure-as-code practices is required."
+                    "**About the Role**\n\n"
+                    "We are looking for a DevOps/Cloud Engineer to own our infrastructure and deployment pipelines. "
+                    "You'll enable the engineering team to ship faster and more reliably — from CI/CD to cloud infrastructure to observability.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Design, build, and maintain CI/CD pipelines using GitHub Actions, GitLab CI, Jenkins, or Azure DevOps\n"
+                    "- Containerise applications with Docker; orchestrate deployments on Kubernetes using Helm\n"
+                    "- Provision and manage cloud infrastructure on AWS, GCP, and Azure using Terraform and Ansible\n"
+                    "- Set up monitoring, alerting, and observability using Prometheus, Grafana, and Datadog\n"
+                    "- Implement SRE practices — SLOs, error budgets, runbooks, incident response\n"
+                    "- Automate operational tasks using Python and Bash scripting on Linux systems\n"
+                    "- Apply security best practices — authentication, encryption, SSL/TLS, secrets management\n\n"
+                    "**Requirements**\n\n"
+                    "- Hands-on experience with Docker and Kubernetes in production\n"
+                    "- Proficiency with at least one major cloud provider (AWS, GCP, or Azure)\n"
+                    "- Experience writing infrastructure-as-code with Terraform or Ansible\n"
+                    "- Strong Linux systems knowledge and scripting skills (Python or Bash)\n"
+                    "- Familiarity with CI/CD tooling and GitOps practices\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with service meshes (Istio, Linkerd)\n"
+                    "- Familiarity with SonarQube or code quality gates\n"
+                    "- Multi-cloud or hybrid cloud experience\n"
+                    "- Knowledge of FinOps or cloud cost optimisation"
                 ),
                 "category": "Engineering",
             },
@@ -254,10 +377,29 @@ def seed_scoring_defaults() -> None:
                 "title": "UI/UX Designer",
                 "role_title": "UX Designer",
                 "description": (
-                    "Design intuitive, accessible, and visually consistent user interfaces and experiences for web and mobile products using Figma or Sketch. "
-                    "Conduct user research, usability testing, and competitive analysis to inform design decisions. "
-                    "Create wireframes, prototypes, and design systems; collaborate closely with frontend engineers during implementation. "
-                    "Strong portfolio demonstrating interaction design, information architecture, and visual design skills is expected."
+                    "**About the Role**\n\n"
+                    "We're hiring a UI/UX Designer to define how our product looks, feels, and behaves. "
+                    "You'll work closely with engineers and product managers to design interfaces that are intuitive, "
+                    "accessible, and delightful to use.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Design intuitive, accessible interfaces using Figma and design thinking methodologies\n"
+                    "- Conduct user research, define personas, and map user journeys\n"
+                    "- Create wireframes, interactive prototypes, and high-fidelity mockups\n"
+                    "- Collaborate with React/TypeScript frontend engineers to ensure design fidelity\n"
+                    "- Define and maintain a component design system and interaction pattern library\n"
+                    "- Run usability tests and iterate designs based on qualitative and quantitative feedback\n"
+                    "- Ensure WCAG accessibility compliance across all user-facing surfaces\n\n"
+                    "**Requirements**\n\n"
+                    "- Strong proficiency in Figma — components, auto layout, prototyping, and variants\n"
+                    "- Solid grasp of UX principles, information architecture, and interaction design\n"
+                    "- Experience conducting and synthesising user research\n"
+                    "- Portfolio demonstrating shipped product work, not just mockups\n"
+                    "- Ability to communicate design decisions clearly to engineers and stakeholders\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience building or maintaining a design system at scale\n"
+                    "- Basic front-end knowledge (HTML/CSS) to aid developer handoff\n"
+                    "- Familiarity with analytics tools (Mixpanel, Hotjar) for data-driven iteration\n"
+                    "- Exposure to motion design or micro-interaction design"
                 ),
                 "category": "Design",
             },
@@ -265,10 +407,28 @@ def seed_scoring_defaults() -> None:
                 "title": "Cybersecurity Analyst",
                 "role_title": "Security Analyst",
                 "description": (
-                    "Identify, assess, and remediate security vulnerabilities across applications, networks, and infrastructure. "
-                    "Conduct penetration testing, threat modelling, and security audits; monitor systems with SIEM tools like Splunk or QRadar. "
-                    "Implement and enforce security frameworks such as ISO 27001, NIST, or OWASP; respond to security incidents and manage CVEs. "
-                    "Experience with ethical hacking, network security, identity management, and cloud security is highly desirable."
+                    "**About the Role**\n\n"
+                    "We are looking for a Cybersecurity Analyst to safeguard our platform, infrastructure, and user data. "
+                    "You'll identify risks, design controls, and respond to threats — with a strong bias towards preventative security.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Identify, assess, and mitigate security vulnerabilities across web applications and cloud infrastructure\n"
+                    "- Implement and review authentication/authorisation systems (OAuth 2.0, JWT, SAML, RBAC)\n"
+                    "- Conduct threat modelling, security audits, and OWASP Top 10 assessments\n"
+                    "- Perform penetration testing and vulnerability scanning on web apps and APIs\n"
+                    "- Apply encryption, SSL/TLS configuration, and secure coding practices across services\n"
+                    "- Respond to security incidents — triage, investigation, containment, and post-mortems\n"
+                    "- Ensure compliance with relevant security and data privacy frameworks\n\n"
+                    "**Requirements**\n\n"
+                    "- Solid understanding of application security concepts and common attack vectors\n"
+                    "- Experience with OWASP Top 10, threat modelling, and security code review\n"
+                    "- Knowledge of authentication protocols — OAuth 2.0, JWT, SAML\n"
+                    "- Familiarity with network security, TLS, and encryption fundamentals\n"
+                    "- Python scripting skills for automation and tooling\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with AWS or Azure cloud security services (IAM, Security Hub, GuardDuty)\n"
+                    "- Exposure to SIEM tools (Splunk, Elastic SIEM)\n"
+                    "- Security certifications (CEH, OSCP, CompTIA Security+)\n"
+                    "- Prior experience in bug bounty programmes or red-teaming"
                 ),
                 "category": "Security",
             },
@@ -276,10 +436,28 @@ def seed_scoring_defaults() -> None:
                 "title": "Mobile Developer (React Native/Flutter)",
                 "role_title": "Mobile Developer",
                 "description": (
-                    "Build and maintain cross-platform iOS and Android applications using React Native or Flutter with clean, maintainable code. "
-                    "Integrate REST APIs, handle device permissions, push notifications, and native device features such as camera and GPS. "
-                    "Publish apps to the App Store and Google Play; manage app performance, crash reporting, and CI/CD with tools like Fastlane. "
-                    "Experience with state management (Redux, Riverpod), TypeScript, and native module bridging is preferred."
+                    "**About the Role**\n\n"
+                    "We're building mobile experiences used by thousands of people daily and need a Mobile Developer "
+                    "who takes ownership of the app layer — from architecture to App Store submission.\n\n"
+                    "**What You'll Do**\n\n"
+                    "- Build and maintain cross-platform mobile applications using React Native and/or Flutter\n"
+                    "- Develop native iOS features in Swift (Xcode) and native Android features in Kotlin (Android Studio) where needed\n"
+                    "- Integrate RESTful APIs and backend services; handle JSON serialisation and local storage (SQLite)\n"
+                    "- Implement native device features — camera, GPS, BLE, push notifications\n"
+                    "- Apply MVVM or similar architecture patterns; manage application state efficiently\n"
+                    "- Set up CI/CD pipelines for mobile; publish and manage releases on the App Store and Google Play\n"
+                    "- Write tests, profile performance, and optimise rendering across device types\n\n"
+                    "**Requirements**\n\n"
+                    "- Hands-on experience shipping mobile apps with React Native or Flutter\n"
+                    "- Proficiency in TypeScript (React Native) or Dart (Flutter)\n"
+                    "- Experience integrating REST APIs in a mobile context\n"
+                    "- Understanding of mobile app architecture patterns (MVVM, BLoC)\n"
+                    "- Familiarity with Git and mobile CI/CD workflows (Fastlane, Bitrise, or similar)\n\n"
+                    "**Nice to Have**\n\n"
+                    "- Experience with native Swift or Kotlin development\n"
+                    "- Familiarity with mobile analytics and crash reporting (Firebase, Sentry)\n"
+                    "- Experience with BLE or hardware device integrations\n"
+                    "- Prior App Store or Google Play submission and review experience"
                 ),
                 "category": "Engineering",
             },
@@ -289,11 +467,66 @@ def seed_scoring_defaults() -> None:
             if row["title"] not in existing:
                 db.add(models.ScoringTemplate(**row, is_active=True, created_by=1))
             else:
-                # Update description/role_title in case they were enriched
-                t = existing[row["title"]]
-                t.description = row["description"]
-                t.role_title = row["role_title"]
+                # Update description so scoring stays accurate as templates evolve
+                existing[row["title"]].description = row["description"]
+                existing[row["title"]].role_title = row["role_title"]
 
+        db.commit()
+    finally:
+        db.close()
+
+
+def seed_penalty_defaults() -> None:
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(models.PenaltyRule)
+            .filter(models.PenaltyRule.recruiter_id.is_(None), models.PenaltyRule.listing_id.is_(None))
+            .count()
+        )
+        if existing > 0:
+            return
+
+        defaults = [
+            {
+                "category": "backend_core",
+                "label": "Backend Core",
+                "keywords": "python,fastapi,django,node.js,express,api,microservices",
+                "penalty_value": 2,
+            },
+            {
+                "category": "data_storage",
+                "label": "Data Storage",
+                "keywords": "sql,postgresql,mysql,mongodb,redis",
+                "penalty_value": 2,
+            },
+            {
+                "category": "devops_delivery",
+                "label": "Delivery & Ops",
+                "keywords": "docker,kubernetes,ci/cd,github-actions,aws,gcp,azure",
+                "penalty_value": 2,
+            },
+            {
+                "category": "quality_engineering",
+                "label": "Testing & Quality",
+                "keywords": "pytest,jest,unittest,testing,code review",
+                "penalty_value": 1,
+            },
+        ]
+
+        for rule in defaults:
+            db.add(
+                models.PenaltyRule(
+                    recruiter_id=None,
+                    listing_id=None,
+                    category=rule["category"],
+                    label=rule["label"],
+                    keywords=rule["keywords"],
+                    penalty_value=rule["penalty_value"],
+                    is_active=True,
+                    created_by=1,
+                )
+            )
         db.commit()
     finally:
         db.close()
@@ -303,6 +536,7 @@ def seed_scoring_defaults() -> None:
 async def lifespan(app: FastAPI):
     seed_admin()
     seed_scoring_defaults()
+    seed_penalty_defaults()
     yield
 
 

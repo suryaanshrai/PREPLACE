@@ -99,11 +99,52 @@ def get_resume_text_for_scoring(resume: models.Resume) -> str:
 
 
 def resolve_penalty_rules(db, recruiter_id: int | None = None, listing_id: int | None = None) -> list[dict]:
-    if listing_id is None:
-        return []
+    rows = []
+
+    # Tier 1: listing-specific recruiter rules.
+    if recruiter_id is not None and listing_id is not None:
+        rows = (
+            db.query(models.PenaltyRule)
+            .filter(models.PenaltyRule.recruiter_id == recruiter_id, models.PenaltyRule.listing_id == listing_id)
+            .order_by(models.PenaltyRule.id.asc())
+            .all()
+        )
+        if rows:
+            return [
+                {
+                    "category": r.category,
+                    "label": r.label,
+                    "keywords": [k.strip().lower() for k in (r.keywords or "").split(",") if k.strip()],
+                    "penalty_value": int(r.penalty_value or 0),
+                    "is_active": bool(r.is_active),
+                }
+                for r in rows
+            ]
+
+    # Tier 2: recruiter defaults (listing_id = null).
+    if recruiter_id is not None:
+        rows = (
+            db.query(models.PenaltyRule)
+            .filter(models.PenaltyRule.recruiter_id == recruiter_id, models.PenaltyRule.listing_id.is_(None))
+            .order_by(models.PenaltyRule.id.asc())
+            .all()
+        )
+        if rows:
+            return [
+                {
+                    "category": r.category,
+                    "label": r.label,
+                    "keywords": [k.strip().lower() for k in (r.keywords or "").split(",") if k.strip()],
+                    "penalty_value": int(r.penalty_value or 0),
+                    "is_active": bool(r.is_active),
+                }
+                for r in rows
+            ]
+
+    # Tier 3: admin global defaults.
     rows = (
         db.query(models.PenaltyRule)
-        .filter(models.PenaltyRule.recruiter_id == recruiter_id, models.PenaltyRule.listing_id == listing_id)
+        .filter(models.PenaltyRule.recruiter_id.is_(None), models.PenaltyRule.listing_id.is_(None))
         .order_by(models.PenaltyRule.id.asc())
         .all()
     )
@@ -124,6 +165,7 @@ def compute_penalty_from_rules(resume_text: str, rules: list[dict]) -> dict:
     missing = []
     found = []
     penalty_total = 0
+    boost_total = 0
 
     for rule in rules:
         if not rule.get("is_active", True):
@@ -137,15 +179,75 @@ def compute_penalty_from_rules(resume_text: str, rules: list[dict]) -> dict:
         penalty_value = int(rule.get("penalty_value", 0) or 0)
 
         if has_match:
-            found.append({"category": category, "label": label})
+            # Found keyword boosts score by the same value it would have penalised.
+            boost_total += penalty_value
+            found.append({"category": category, "label": label, "boost": penalty_value})
         else:
             penalty_total += penalty_value
             missing.append({"category": category, "label": label, "penalty": penalty_value})
 
     return {
         "penalty_total": penalty_total,
+        "boost_total": min(boost_total, 20),
         "missing_keywords": missing,
         "found_keywords": found,
+    }
+
+
+def compute_structural_bonus(resume_text: str) -> dict:
+    """
+    Detect structural quality signals in a resume and return a bonus score (max 15).
+    Structural completeness is a resume quality dimension independent of role fit.
+    """
+    text = resume_text or ""
+    lower = text.lower()
+    signals: list[str] = []
+    bonus = 0
+
+    # Contact information
+    if re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', text):
+        bonus += 2
+        signals.append("email_present")
+    if re.search(r'(\+\d[\d\s\-]{7,}|\b\d{10}\b|\b\d{3}[\s\-]\d{3}[\s\-]\d{4}\b)', text):
+        bonus += 1
+        signals.append("phone_present")
+
+    # Professional links
+    if re.search(r'linkedin\.com', lower):
+        bonus += 1
+        signals.append("linkedin_link")
+    if re.search(r'github\.com', lower):
+        bonus += 1
+        signals.append("github_link")
+
+    # Resume sections
+    if re.search(r'\b(summary|objective|profile|about me|professional summary)\b', lower):
+        bonus += 2
+        signals.append("summary_section")
+    if re.search(r'\b(experience|work history|employment)\b', lower):
+        bonus += 2
+        signals.append("experience_section")
+    if re.search(r'\b(education|degree|bachelor|master|b\.tech|m\.tech|university|college)\b', lower):
+        bonus += 2
+        signals.append("education_section")
+    if re.search(r'\b(project|projects|portfolio)\b', lower):
+        bonus += 1
+        signals.append("projects_section")
+    if re.search(r'\b(skills|technologies|tech stack|tools|frameworks)\b', lower):
+        bonus += 1
+        signals.append("skills_section")
+
+    # Quality signals
+    if re.search(r'\b\d+\s*%|\b(reduced|improved|increased|optimized)\b', lower):
+        bonus += 2
+        signals.append("quantified_achievements")
+    if re.search(r'\b(certification|certified|certificate|coursera|udemy|edx)\b', lower):
+        bonus += 1
+        signals.append("certifications")
+
+    return {
+        "structural_bonus": min(bonus, 15),
+        "structural_signals": signals,
     }
 
 
@@ -222,12 +324,30 @@ def evaluate_resume_for_job_with_db(db, resume: models.Resume, job: models.JobLi
     penalty = compute_penalty_from_rules(resume_text, rules)
     penalty_total = int(penalty["penalty_total"])
 
+    # When Chroma is unavailable, vector_score from the index is 0.
+    # Fall back to PRECISE text similarity so scores are not capped by the
+    # hybrid formula (max 0.45 × rule_score = 45).
+    if vector_score == 0:
+        job_target = (
+            f"Role: {job.role_title or ''}. "
+            f"Skills: {job.skills or ''}. "
+            f"Description: {job.description or ''}"
+        )
+        vector_score = float(vector_store.text_similarity_score(resume_text, job_target))
+
+    boost_total = int(penalty["boost_total"])
+    structural = compute_structural_bonus(resume_text)
+    structural_bonus = structural["structural_bonus"]
+
     if vector_score > 0:
-        match = clamp_score(vector_score - penalty_total)
-        engine = "vector_penalty_v2"
+        # Blend JD-text similarity with deterministic rule scoring to reduce
+        # inflated matches caused by generic overlap in resume/JD text.
+        blended = (0.55 * vector_score) + (0.45 * rule_score)
+        match = clamp_score(blended + boost_total + structural_bonus - penalty_total)
+        engine = "vector_rule_penalty_v3"
         fallback_reason = None
     else:
-        match = fallback_hybrid
+        match = clamp_score(fallback_hybrid + structural_bonus)
         engine = "fallback_hybrid"
         fallback_reason = "no_vector_score"
 
@@ -237,6 +357,9 @@ def evaluate_resume_for_job_with_db(db, resume: models.Resume, job: models.JobLi
         "hybrid": fallback_hybrid,
         "match": match,
         "penalty_total": penalty_total,
+        "boost_total": boost_total,
+        "structural_bonus": structural_bonus,
+        "structural_signals": structural["structural_signals"],
         "missing_keywords": penalty["missing_keywords"],
         "found_keywords": penalty["found_keywords"],
         "scoring_engine": engine,
@@ -250,19 +373,26 @@ def score_resume_against_target(db, resume: models.Resume, target_text: str, rec
     rules = resolve_penalty_rules(db, recruiter_id=recruiter_id, listing_id=listing_id)
     penalty = compute_penalty_from_rules(resume_text, rules)
     penalty_total = int(penalty["penalty_total"])
+    boost_total = int(penalty["boost_total"])
+
+    structural = compute_structural_bonus(resume_text)
+    structural_bonus = structural["structural_bonus"]
 
     if target_text.strip() and vector_score > 0:
-        final_score = clamp_score(vector_score - penalty_total)
+        final_score = clamp_score(vector_score + boost_total + structural_bonus - penalty_total)
         engine = "vector_penalty_v2"
         fallback_reason = None
     else:
-        final_score = resume.score or 0
+        final_score = clamp_score((resume.score or 0) + structural_bonus)
         engine = "fallback_hybrid"
         fallback_reason = "no_target_or_zero_similarity"
 
     breakdown = {
         "vector_score": round(vector_score, 2),
         "penalty_total": penalty_total,
+        "boost_total": boost_total,
+        "structural_bonus": structural_bonus,
+        "structural_signals": structural["structural_signals"],
         "missing_keywords": penalty["missing_keywords"],
         "found_keywords": penalty["found_keywords"],
         "final_score": final_score,

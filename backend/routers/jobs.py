@@ -152,23 +152,25 @@ def upsert_recruiter_penalties(
         query = query.filter(models.PenaltyRule.listing_id.is_(None))
     else:
         query = query.filter(models.PenaltyRule.listing_id == listing_id)
-    query.delete()
-
-    for rule in payload.rules:
-        db.add(
-            models.PenaltyRule(
-                recruiter_id=recruiter_id,
-                listing_id=listing_id,
-                category=rule.category.strip(),
-                label=rule.label.strip(),
-                keywords=",".join([k.strip().lower() for k in rule.keywords if k.strip()]),
-                penalty_value=max(0, int(rule.penalty_value)),
-                is_active=bool(rule.is_active),
-                created_by=recruiter_id,
+    try:
+        query.delete()
+        for rule in payload.rules:
+            db.add(
+                models.PenaltyRule(
+                    recruiter_id=recruiter_id,
+                    listing_id=listing_id,
+                    category=rule.category.strip(),
+                    label=rule.label.strip(),
+                    keywords=",".join([k.strip().lower() for k in rule.keywords if k.strip()]),
+                    penalty_value=max(0, int(rule.penalty_value)),
+                    is_active=bool(rule.is_active),
+                    created_by=recruiter_id,
+                )
             )
-        )
-
-    db.commit()
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return {"error": f"Failed to save rules: {exc}"}
     log_audit(
         db,
         "recruiter.penalties_update",

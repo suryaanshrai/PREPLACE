@@ -72,7 +72,33 @@ JOB_LISTINGS = [
         "Internship",
         "Remote",
         "₹20,000/month",
-        "Build backend APIs and contribute to core product features using Python, FastAPI, and PostgreSQL. Write clean, tested code and participate in code reviews.",
+        """**About the Role**
+
+We're not hiring resumes — we're hiring builders. You'll work across the stack, shipping real features that go straight to production. This is a 6-month internship with a strong potential for a full-time offer based on performance.
+
+**What You'll Do**
+
+- Build and maintain backend services in Python (FastAPI), including REST and WebSocket APIs for data ingestion and product features
+- Work with PostgreSQL — schema design, query optimisation, and migrations
+- Develop and modify frontend components in React; build operator-facing dashboards and iterate based on team feedback
+- Write clean, tested code and participate in peer code reviews; maintain internal documentation
+- Help with containerised deployments using Docker across dev and staging environments
+- Debug issues end-to-end — trace a bug from a React component through an API to a misconfigured service
+
+**Requirements**
+
+- Strong fundamentals in data structures, algorithms, and systems thinking
+- Proficiency in Python — you write clean, maintainable code, not just scripts that work once
+- Working knowledge of JavaScript/React — enough to build and modify frontend components
+- Comfortable on Linux: CLI, processes, basic networking
+- Understanding of REST APIs, client-server architecture, and async patterns
+
+**Nice to Have**
+
+- Familiarity with Docker and containers
+- Exposure to cloud platforms (AWS/GCP)
+- Experience with PostgreSQL or similar relational databases
+- Basic CI/CD knowledge (GitHub Actions)""",
         "Python,FastAPI,PostgreSQL,Docker,Git",
         7.0,
         60,
@@ -85,7 +111,36 @@ JOB_LISTINGS = [
         "Full-Time",
         "Bangalore",
         "₹12-18 LPA",
-        "Design and implement scalable REST microservices. Own service reliability, contribute to architecture decisions, and mentor junior engineers.",
+        """**About the Role**
+
+We are building scalable backend systems that power our core product. As a Backend Engineer, you will own services end-to-end — from design to deployment to reliability. You'll work in a small, high-ownership team where your decisions directly shape the architecture.
+
+**What You'll Do**
+
+- Design and build scalable RESTful APIs and microservices using Python (FastAPI/Django)
+- Integrate ML/data pipelines into backend systems and internal services
+- Build and maintain async job systems — background workers, retries, idempotency, and state tracking
+- Work with message brokers (Redis/RabbitMQ) for event-driven communication between services
+- Design and manage cloud infrastructure on AWS/GCP; deploy services using Docker and CI/CD pipelines (GitHub Actions)
+- Implement logging, monitoring, and alerting across distributed workflows (Prometheus, Grafana)
+- Contribute to architecture decisions, database modelling, and backend scaling strategies
+- Conduct code reviews and mentor junior engineers
+
+**Requirements**
+
+- 1–2 years of hands-on backend development experience
+- Strong Python skills; proficiency in FastAPI or similar frameworks
+- Solid experience with PostgreSQL and SQL query optimisation
+- Experience building and consuming REST APIs at scale
+- Familiarity with Docker and CI/CD workflows
+- Understanding of distributed systems, async processing, and microservices architecture
+
+**Nice to Have**
+
+- Experience with Kubernetes or container orchestration
+- Infrastructure-as-code experience (Terraform/Pulumi)
+- Exposure to observability tools (OpenTelemetry, Grafana)
+- Prior work integrating ML models or LLM pipelines into production systems""",
         "Python,SQL,REST,Microservices,Docker,Kubernetes",
         7.5,
         65,
@@ -98,7 +153,36 @@ JOB_LISTINGS = [
         "Full-Time",
         "Remote",
         "₹10-15 LPA",
-        "Build responsive React applications, consume REST APIs, and improve UI/UX quality and performance across the product.",
+        """**About the Role**
+
+We're looking for a Frontend Developer to own the user-facing layer of our product. You'll work in a cross-functional squad alongside backend engineers, designers, and a product manager to deliver fast, polished, and accessible web experiences.
+
+**What You'll Do**
+
+- Develop and maintain responsive web interfaces using React and TypeScript
+- Build reusable, performant component libraries and design system primitives
+- Translate Figma designs and wireframes into high-quality, pixel-accurate code
+- Integrate RESTful APIs and manage client-side state (Redux or Context API)
+- Optimise frontend performance — lazy loading, code splitting, bundle size, rendering efficiency
+- Ensure cross-browser and cross-device compatibility; write unit and integration tests
+- Participate in code reviews, maintain technical documentation, and contribute to frontend architecture decisions
+- Collaborate asynchronously in a remote-first environment
+
+**Requirements**
+
+- 1–2 years of experience in frontend development
+- Strong proficiency in React.js and its core principles (hooks, component lifecycle, reconciliation)
+- Solid TypeScript skills; you write type-safe code without fighting the compiler
+- Good understanding of HTML5, CSS3, and responsive design
+- Experience consuming REST APIs and handling async data flows
+- Familiarity with Git, PR workflows, and agile development practices
+
+**Nice to Have**
+
+- Experience with micro-frontend architecture or design systems
+- Familiarity with testing frameworks (Jest, React Testing Library)
+- Exposure to Next.js or SSR patterns
+- Understanding of web accessibility (WCAG) standards""",
         "React,TypeScript,CSS,HTML,REST,Git",
         7.0,
         60,
@@ -111,7 +195,34 @@ JOB_LISTINGS = [
         "Full-Time",
         "Delhi",
         "₹8-12 LPA",
-        "Analyze large datasets, build dashboards in Tableau, and generate actionable business insights using SQL and Python.",
+        """**About the Role**
+
+We are looking for a Data Analyst who is equally comfortable writing complex SQL and explaining a trend to a non-technical stakeholder. You'll work directly with business teams to turn raw data into decisions — building dashboards, running analyses, and flagging what matters.
+
+**What You'll Do**
+
+- Write advanced SQL queries (window functions, CTEs, complex multi-table joins) against our data warehouse (PostgreSQL/BigQuery)
+- Build and maintain interactive dashboards in Tableau and Power BI for business stakeholders across growth, operations, and finance
+- Use Python (Pandas, NumPy) for exploratory data analysis, statistical modelling, and automating recurring reports
+- Identify trends, anomalies, and business insights; present findings clearly with supporting visualisations
+- Implement data quality checks and validation frameworks to ensure data integrity
+- Collaborate with the data engineering team to define requirements for automated pipelines
+- Respond to ad-hoc analysis requests with quick, well-documented turnarounds
+
+**Requirements**
+
+- Strong SQL skills — you're comfortable with window functions, subqueries, and query optimisation
+- Hands-on Python experience for data analysis (Pandas, NumPy)
+- Experience building dashboards in Tableau or Power BI
+- Analytical mindset with strong attention to detail
+- Good communication skills — able to translate data findings into business language
+
+**Nice to Have**
+
+- Experience with a cloud data warehouse (BigQuery, Redshift, or Snowflake)
+- Familiarity with dbt or similar data transformation tools
+- Exposure to A/B testing and statistical significance frameworks
+- Degree in Computer Science, Statistics, Mathematics, or a related field""",
         "Python,SQL,Tableau,Pandas,Excel,Power BI",
         7.0,
         58,
@@ -124,7 +235,34 @@ JOB_LISTINGS = [
         "Internship",
         "Remote",
         "₹15,000/month",
-        "Assist in building and evaluating machine learning models. Work with real-world datasets and contribute to model deployment pipelines.",
+        """**About the Role**
+
+We're looking for an ML Intern with a genuine curiosity for applied machine learning. You'll work alongside senior data scientists on real datasets, building and evaluating models that go into production — not toy projects. Internship duration is 3–6 months with potential for full-time conversion based on performance.
+
+**What You'll Do**
+
+- Preprocess, clean, and explore real-world datasets using Pandas and NumPy
+- Implement, train, and benchmark classification, regression, and clustering models using Scikit-learn and TensorFlow/PyTorch
+- Conduct feature engineering and hyperparameter tuning; track experiments systematically (MLflow or similar)
+- Evaluate model performance using appropriate metrics; write clear experiment reports
+- Assist in integrating trained models into backend APIs for inference
+- Collaborate with the data engineering team to understand data pipelines and upstream quality issues
+- Present findings and model results to the team in weekly syncs
+
+**Requirements**
+
+- Strong Python programming skills
+- Solid understanding of core ML concepts — supervised/unsupervised learning, overfitting, cross-validation, evaluation metrics
+- Hands-on experience with Scikit-learn, Pandas, and NumPy
+- Ability to read, understand, and adapt existing ML code
+- Currently pursuing or recently completed a degree in CS, Data Science, Statistics, or related field
+
+**Nice to Have**
+
+- Experience with deep learning frameworks (TensorFlow or PyTorch)
+- Familiarity with MLflow or experiment tracking tools
+- Exposure to cloud platforms (AWS SageMaker, GCP Vertex AI)
+- Prior project or kaggle competition experience""",
         "Python,ML,TensorFlow,Scikit-learn,Pandas,NumPy",
         7.5,
         62,

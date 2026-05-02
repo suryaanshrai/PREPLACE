@@ -139,32 +139,39 @@ function ScoringSettingsPanel({ showToast, userId, initialListingId }) {
 
   async function saveRules() {
     if (!selectedListing) { showToast('Select a job listing first.', 'var(--accent3)'); return }
+    const incomplete = rules.filter(r => !r.category.trim() || !r.label.trim())
+    if (incomplete.length > 0) {
+      showToast(`${incomplete.length} rule(s) are missing a category or label. Fill them in before saving.`, 'var(--accent3)')
+      return
+    }
     const payload = {
-      rules: rules
-        .filter(r => r.category.trim() && r.label.trim())
-        .map(r => ({
-          category: r.category.trim(),
-          label: r.label.trim(),
-          keywords: r.keywords.split(',').map(x => x.trim()).filter(Boolean),
-          penalty_value: Math.max(0, parseInt(r.penalty_value) || 0),
-          is_active: !!r.is_active,
-        })),
+      rules: rules.map(r => ({
+        category: r.category.trim(),
+        label: r.label.trim(),
+        keywords: r.keywords.split(',').map(x => x.trim()).filter(Boolean),
+        penalty_value: Math.max(0, parseInt(r.penalty_value) || 0),
+        is_active: !!r.is_active,
+      })),
     }
     const apiUrl = getApiUrl()
     const params = new URLSearchParams({ recruiter_id: String(userId), listing_id: selectedListing })
 
-    const resp = await fetch(`${apiUrl}/recruiter/penalties?${params.toString()}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    const data = await resp.json()
-    if (data.error) {
-      showToast(data.error, 'var(--accent3)')
-      return
+    try {
+      const resp = await fetch(`${apiUrl}/recruiter/penalties?${params.toString()}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await resp.json()
+      if (!resp.ok || data.error) {
+        showToast(data.error || `Server error (${resp.status})`, 'var(--accent3)')
+        return
+      }
+      showToast(`${payload.rules.length} rule${payload.rules.length === 1 ? '' : 's'} saved.`, 'var(--accent)')
+      loadRules(selectedListing)
+    } catch (err) {
+      showToast('Failed to reach server. Check your connection.', 'var(--accent3)')
     }
-    showToast('Scoring penalties saved.', 'var(--accent)')
-    loadRules(selectedListing)
   }
 
   if (loading) return <div className="panel active"><div className="loader"><div className="spinner"></div><div className="loader-step">Loading scoring settings…</div></div></div>
@@ -192,21 +199,33 @@ function ScoringSettingsPanel({ showToast, userId, initialListingId }) {
           </div>
 
           <div style={{ display: 'grid', gap: '0.55rem' }}>
-            {rules.length === 0 && (
+            {rules.length === 0 ? (
               <div style={{ fontSize: '0.8rem', color: 'var(--muted)', padding: '0.8rem 0' }}>No rules yet. Click <strong>+ Add Rule</strong> to define penalties for this listing.</div>
-            )}
-            {rules.map((rule, idx) => (
-              <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.4fr 2fr 110px 90px 80px', gap: '0.45rem', alignItems: 'center' }}>
-                <input className="form-input" placeholder="category" value={rule.category} onChange={e => updateRule(idx, 'category', e.target.value)} />
-                <input className="form-input" placeholder="label" value={rule.label} onChange={e => updateRule(idx, 'label', e.target.value)} />
-                <input className="form-input" placeholder="keywords comma-separated" value={rule.keywords} onChange={e => updateRule(idx, 'keywords', e.target.value)} />
-                <input className="form-input" type="number" min="0" max="50" value={rule.penalty_value} onChange={e => updateRule(idx, 'penalty_value', e.target.value)} />
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', color: 'var(--muted)' }}>
-                  <input type="checkbox" checked={rule.is_active} onChange={e => updateRule(idx, 'is_active', e.target.checked)} /> Active
-                </label>
-                <button className="apply-btn" style={{ color: 'var(--accent3)' }} onClick={() => removeRule(idx)}>Delete</button>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.4fr 2fr 110px 90px 80px', gap: '0.45rem', alignItems: 'center', padding: '0 0 0.3rem', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Category</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Label</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Keywords (comma-separated)</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Penalty</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Active</span>
+                <span />
               </div>
-            ))}
+            )}
+            {rules.map((rule, idx) => {
+              const incomplete = !rule.category.trim() || !rule.label.trim()
+              return (
+                <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.4fr 2fr 110px 90px 80px', gap: '0.45rem', alignItems: 'center' }}>
+                  <input className="form-input" placeholder="category" value={rule.category} onChange={e => updateRule(idx, 'category', e.target.value)} style={!rule.category.trim() ? { borderColor: 'var(--accent3)' } : {}} />
+                  <input className="form-input" placeholder="label" value={rule.label} onChange={e => updateRule(idx, 'label', e.target.value)} style={!rule.label.trim() ? { borderColor: 'var(--accent3)' } : {}} />
+                  <input className="form-input" placeholder="e.g. python, react, node" value={rule.keywords} onChange={e => updateRule(idx, 'keywords', e.target.value)} />
+                  <input className="form-input" type="number" min="0" max="50" value={rule.penalty_value} onChange={e => updateRule(idx, 'penalty_value', e.target.value)} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', color: 'var(--muted)' }}>
+                    <input type="checkbox" checked={rule.is_active} onChange={e => updateRule(idx, 'is_active', e.target.checked)} /> Active
+                  </label>
+                  <button className="apply-btn" style={{ color: 'var(--accent3)' }} onClick={() => removeRule(idx)}>Delete</button>
+                </div>
+              )
+            })}
           </div>
 
           <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>

@@ -67,6 +67,10 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
   const [isDropdownOpen, setIsDropdownOpen] = React.useState(false)
   const [customRole, setCustomRole] = React.useState('')
   const [jobDescription, setJobDescription] = React.useState('')
+  const [insightsLoading, setInsightsLoading] = React.useState(false)
+  const [insightsError, setInsightsError] = React.useState('')
+  const [insightsData, setInsightsData] = React.useState(null)
+  const [insightsMode, setInsightsMode] = React.useState('general')
   const fileInputRef = React.useRef(null)
   const stepTimerRef = React.useRef(null)
   const dropdownRef = React.useRef(null)
@@ -152,7 +156,6 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
     const parsed = parseAnalysis(raw)
     const finalScore = data.final_score || data.score || parsed.score || 0
     const vectorScore = data.vector_score ?? null
-    const penalty = data.penalty_total ?? data.penalty ?? 0
     const suggestedRole = data.suggested_role || ''
     const missingKeywords = data.missing_keywords || []
     const foundKeywords = data.found_keywords || []
@@ -164,13 +167,17 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
     const tips = tipLines.length ? tipLines : improvements.slice(0, 3)
 
     setResult({
-      score: finalScore, vectorScore, penalty, suggestedRole,
+      resumeId: data.resume_id || null,
+      score: finalScore, vectorScore, suggestedRole,
       scoringEngine,
       missingKeywords, foundKeywords,
       strengths, improvements, tips,
       filename: data.original_filename || data.filename || file?.name || 'Resume',
       analysis: raw
     })
+    setInsightsData(null)
+    setInsightsError('')
+    setInsightsMode('general')
     setPhase('results')
 
     onScoreUpdate(finalScore, suggestedRole)
@@ -184,10 +191,62 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
     }, 20)
 
     const vectorMsg = vectorScore === null ? 'n/a' : Math.round(vectorScore)
-    showToast(`🎉 Final Score: ${finalScore}/100 (Vector ${vectorMsg} − Penalty ${penalty})`, getScoreColor(finalScore))
+    showToast(`🎉 Final Score: ${finalScore}/100 (Vector ${vectorMsg})`, getScoreColor(finalScore))
   }
 
-  function reset() { setPhase('upload'); setResult(null); setScoreAnimVal(0); clearFile() }
+  async function runInsights() {
+    if (!result?.resumeId) {
+      setInsightsError('Resume ID missing. Please re-run analysis once.')
+      showToast('Resume ID missing for insights.', 'var(--accent3)')
+      return
+    }
+
+    const apiUrl = getApiUrl()
+    setInsightsLoading(true)
+    setInsightsError('')
+
+    const resolvedTarget = insightsMode === 'targeted'
+      ? (result.suggestedRole || customRole || '').trim()
+      : ''
+
+    try {
+      const params = new URLSearchParams({ user_id: String(user.id || 1) })
+      const resp = await fetch(`${apiUrl}/resume-insights?${params.toString()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resume_id: result.resumeId,
+          role_mode: insightsMode,
+          target_role: resolvedTarget,
+        }),
+      })
+
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || data.detail || `Server error ${resp.status}`)
+      }
+
+      setInsightsData(data)
+      showToast('✨ LLM insights generated.', 'var(--accent)')
+    } catch (err) {
+      const message = err.message || 'Could not generate insights right now.'
+      setInsightsError(message)
+      showToast('Insights generation failed', 'var(--accent3)')
+    } finally {
+      setInsightsLoading(false)
+    }
+  }
+
+  function reset() {
+    setPhase('upload')
+    setResult(null)
+    setScoreAnimVal(0)
+    setInsightsData(null)
+    setInsightsError('')
+    setInsightsMode('general')
+    setInsightsLoading(false)
+    clearFile()
+  }
 
   const ringOffset = result ? 220 - (result.score / 100) * 220 : 220
 
@@ -326,10 +385,6 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
                   <span style={{ color: 'var(--muted)' }}>Vector: </span>
                   <span style={{ color: 'var(--accent)', fontWeight: 800 }}>{result.vectorScore == null ? 'n/a' : Math.round(result.vectorScore)}</span>
                 </div>
-                <div style={{ padding: '0.35rem 0.7rem', background: 'rgba(255,92,135,0.06)', border: '1px solid rgba(255,92,135,0.15)', borderRadius: 8, fontSize: '0.72rem', fontWeight: 600 }}>
-                  <span style={{ color: 'var(--muted)' }}>Penalty: </span>
-                  <span style={{ color: 'var(--accent3)', fontWeight: 800 }}>−{result.penalty}</span>
-                </div>
                 <div style={{ padding: '0.35rem 0.7rem', background: 'rgba(77,159,255,0.06)', border: '1px solid rgba(77,159,255,0.15)', borderRadius: 8, fontSize: '0.72rem', fontWeight: 600 }}>
                   <span style={{ color: 'var(--muted)' }}>Final: </span>
                   <span style={{ color: '#4d9fff', fontWeight: 800 }}>{result.score}</span>
@@ -345,35 +400,6 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
               </div>
             </div>
           </div>
-
-          {/* Keyword Penalty Breakdown */}
-          {(result.missingKeywords.length > 0 || result.foundKeywords.length > 0) && (
-            <div style={{ marginTop: '1rem', padding: '1rem 1.2rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14 }}>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.7rem' }}>📊 Keyword Scan Results</div>
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                {/* Found */}
-                <div style={{ flex: 1, minWidth: 180 }}>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--accent)', marginBottom: '0.4rem' }}>✓ Found ({result.foundKeywords.length})</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                    {result.foundKeywords.map(f => (
-                      <span key={f.category} className="jtag" style={{ background: 'rgba(0,229,160,0.08)', borderColor: 'rgba(0,229,160,0.2)', color: 'var(--accent)', fontSize: '0.65rem' }}>{f.label}</span>
-                    ))}
-                  </div>
-                </div>
-                {/* Missing */}
-                {result.missingKeywords.length > 0 && (
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--accent3)', marginBottom: '0.4rem' }}>✕ Missing ({result.missingKeywords.length})</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                      {result.missingKeywords.map(m => (
-                        <span key={m.category} className="jtag" style={{ background: 'rgba(255,92,135,0.08)', borderColor: 'rgba(255,92,135,0.2)', color: 'var(--accent3)', fontSize: '0.65rem' }}>{m.label} (−{m.penalty})</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
 
           <div className="feedback-grid">
             <div className="feed-card s">
@@ -394,6 +420,100 @@ function ResumeAnalyzer({ showToast, onScoreUpdate }) {
                 {result.tips.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </div>
+          </div>
+
+          <div className="insights-wrap">
+            <div className="insights-head">
+              <div>
+                <div className="insights-title">LLM Resume Insights</div>
+                <div className="insights-sub">Separate feature from score. Generates targeted sections with actionable feedback.</div>
+              </div>
+              <div className="insights-actions">
+                <div className="insights-mode-switch">
+                  <button
+                    className={`ins-mode-btn ${insightsMode === 'general' ? 'active' : ''}`}
+                    onClick={() => setInsightsMode('general')}
+                    disabled={insightsLoading}
+                  >
+                    General
+                  </button>
+                  <button
+                    className={`ins-mode-btn ${insightsMode === 'targeted' ? 'active' : ''}`}
+                    onClick={() => setInsightsMode('targeted')}
+                    disabled={insightsLoading}
+                  >
+                    Role Targeted
+                  </button>
+                </div>
+                <button className="apply-btn insights-btn" onClick={runInsights} disabled={insightsLoading || !result.resumeId}>
+                  {insightsLoading ? 'Generating…' : '💡 Get LLM Insights'}
+                </button>
+              </div>
+            </div>
+
+            {insightsError && <div className="analysis-error">⚠️ {insightsError}</div>}
+
+            {insightsData && (
+              <div className="insights-body">
+                <div className="insights-meta">
+                  <span className="jtag" style={{ borderColor: 'rgba(77,159,255,0.2)', color: '#4d9fff' }}>Mode: {insightsData.role_mode}</span>
+                  <span className="jtag" style={{ borderColor: 'rgba(0,229,160,0.2)', color: 'var(--accent)' }}>Target: {insightsData.target_role || 'General Role'}</span>
+                  <span className="jtag">Source: {insightsData.source || 'llm'}</span>
+                </div>
+
+                <div className="score-summary-txt" style={{ marginTop: '0.2rem' }}>
+                  {insightsData.headline}
+                </div>
+                {insightsData.note && (
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: 'var(--muted)' }}>{insightsData.note}</div>
+                )}
+
+                <div className="insights-grid">
+                  {(insightsData.sections || []).map((section, idx) => (
+                    <div className="feed-card insight-card" key={`${section.title}-${idx}`}>
+                      <div className="feed-title"><div className="feed-title-dot"></div>{section.title}</div>
+                      {section.summary && <div className="insight-summary">{section.summary}</div>}
+
+                      {Array.isArray(section.insights) && section.insights.length > 0 && (
+                        <>
+                          <div className="insight-list-label">Insights</div>
+                          <ul className="feed-list">
+                            {section.insights.slice(0, 5).map((item, i) => <li key={i}>{item}</li>)}
+                          </ul>
+                        </>
+                      )}
+
+                      {Array.isArray(section.actionable_steps) && section.actionable_steps.length > 0 && (
+                        <>
+                          <div className="insight-list-label" style={{ marginTop: '0.7rem' }}>Actionable Steps</div>
+                          <ul className="feed-list">
+                            {section.actionable_steps.slice(0, 5).map((item, i) => <li key={i}>{item}</li>)}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {Array.isArray(insightsData.action_plan) && insightsData.action_plan.length > 0 && (
+                  <div className="insights-plan">
+                    <div className="feed-title"><div className="feed-title-dot"></div>Prioritized Action Plan</div>
+                    <div className="ins-plan-list">
+                      {insightsData.action_plan.slice(0, 6).map((item, idx) => (
+                        <div className="ins-plan-item" key={`${item.step}-${idx}`}>
+                          <div className={`ins-priority ${item.priority || 'medium'}`}>{item.priority || 'medium'}</div>
+                          <div className="ins-plan-content">
+                            <div className="ins-plan-step">{item.step}</div>
+                            {item.why_it_matters && <div className="ins-plan-why">{item.why_it_matters}</div>}
+                            {item.timeframe && <div className="ins-plan-time">Effort: {item.timeframe}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -703,17 +823,58 @@ function LinkedInTab({ showToast }) {
   const [loading, setLoading] = React.useState(true)
   const [refreshing, setRefreshing] = React.useState(false)
   const [error, setError] = React.useState('')
+  const [filters, setFilters] = React.useState({
+    keyword: '',
+    location: '',
+    experienceLevel: 'entry level',
+    jobType: '',
+    remoteFilter: '',
+    limit: '10',
+    includeAdjacent: true,
+  })
+  const [didInitFilters, setDidInitFilters] = React.useState(false)
 
   const user = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
   }, [])
 
-  function loadRecommendations(forceRefresh = false) {
+  const EXPERIENCE_OPTIONS = ['internship', 'entry level', 'associate', 'senior', 'director', 'executive']
+  const JOB_TYPE_OPTIONS = ['', 'full time', 'part time', 'contract', 'temporary', 'volunteer', 'internship']
+  const REMOTE_OPTIONS = ['', 'on-site', 'remote', 'hybrid']
+
+  function toQueryParams(activeFilters) {
+    const params = new URLSearchParams({ user_id: String(user.id) })
+    if (activeFilters.keyword.trim()) params.set('keyword', activeFilters.keyword.trim())
+    if (activeFilters.location.trim()) params.set('location', activeFilters.location.trim())
+    if (activeFilters.experienceLevel) params.set('experienceLevel', activeFilters.experienceLevel)
+    if (activeFilters.jobType) params.set('jobType', activeFilters.jobType)
+    if (activeFilters.remoteFilter) params.set('remoteFilter', activeFilters.remoteFilter)
+    if (activeFilters.limit) params.set('limit', String(activeFilters.limit))
+    params.set('include_adjacent_keywords', activeFilters.includeAdjacent ? 'true' : 'false')
+    return params
+  }
+
+  function syncFiltersFromSearchParams(searchParams) {
+    if (!searchParams || didInitFilters) return
+    setFilters({
+      keyword: searchParams.keyword || '',
+      location: searchParams.location || '',
+      experienceLevel: searchParams.experienceLevel || 'entry level',
+      jobType: searchParams.jobType || '',
+      remoteFilter: searchParams.remoteFilter || '',
+      limit: String(searchParams.limit || 10),
+      includeAdjacent: searchParams.include_adjacent_keywords !== false,
+    })
+    setDidInitFilters(true)
+  }
+
+  function loadRecommendations(forceRefresh = false, activeFilters = filters) {
     if (!user.id) { setLoading(false); return }
     const apiUrl = getApiUrl()
+    const params = toQueryParams(activeFilters)
     const endpoint = forceRefresh
-      ? `${apiUrl}/linkedin-recommendations/refresh?user_id=${user.id}`
-      : `${apiUrl}/linkedin-recommendations?user_id=${user.id}`
+      ? `${apiUrl}/linkedin-recommendations/refresh?${params.toString()}`
+      : `${apiUrl}/linkedin-recommendations?${params.toString()}`
     const method = forceRefresh ? 'POST' : 'GET'
 
     if (forceRefresh) setRefreshing(true); else setLoading(true)
@@ -723,17 +884,38 @@ function LinkedInTab({ showToast }) {
       .then(r => r.json())
       .then(res => {
         if (res.detail) { setError(res.detail); setData(null) }
-        else { setData(res) }
+        else {
+          setData(res)
+          syncFiltersFromSearchParams(res.search_params)
+        }
         setLoading(false); setRefreshing(false)
         if (forceRefresh && !res.detail) showToast('LinkedIn recommendations refreshed.', 'var(--accent)')
       })
-      .catch(err => {
+      .catch(() => {
         setError('Could not connect to backend.')
         setLoading(false); setRefreshing(false)
       })
   }
 
   React.useEffect(() => { loadRecommendations() }, [user.id])
+
+  function applyFilters() {
+    loadRecommendations(false, filters)
+  }
+
+  function resetFilters() {
+    const reset = {
+      keyword: '',
+      location: '',
+      experienceLevel: 'entry level',
+      jobType: '',
+      remoteFilter: '',
+      limit: '10',
+      includeAdjacent: true,
+    }
+    setFilters(reset)
+    loadRecommendations(false, reset)
+  }
 
   if (loading) return (
     <div className="panel active">
@@ -762,11 +944,81 @@ function LinkedInTab({ showToast }) {
           className="apply-btn"
           style={{ whiteSpace: 'nowrap' }}
           disabled={refreshing}
-          onClick={() => loadRecommendations(true)}
+          onClick={() => loadRecommendations(true, filters)}
         >
           {refreshing ? 'Refreshing…' : '🔄 Refresh'}
         </button>
       </div>
+
+      {/* Editable search controls */}
+      <div style={{ marginBottom: '0.9rem', padding: '0.85rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.55rem' }}>
+          <input
+            className="form-input"
+            value={filters.keyword}
+            placeholder="Keyword"
+            onChange={(e) => setFilters(prev => ({ ...prev, keyword: e.target.value }))}
+          />
+          <input
+            className="form-input"
+            value={filters.location}
+            placeholder="Location"
+            onChange={(e) => setFilters(prev => ({ ...prev, location: e.target.value }))}
+          />
+          <select
+            className="form-input"
+            value={filters.experienceLevel}
+            onChange={(e) => setFilters(prev => ({ ...prev, experienceLevel: e.target.value }))}
+          >
+            {EXPERIENCE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+          <select
+            className="form-input"
+            value={filters.jobType}
+            onChange={(e) => setFilters(prev => ({ ...prev, jobType: e.target.value }))}
+          >
+            {JOB_TYPE_OPTIONS.map(opt => <option key={opt || 'any'} value={opt}>{opt || 'any job type'}</option>)}
+          </select>
+          <select
+            className="form-input"
+            value={filters.remoteFilter}
+            onChange={(e) => setFilters(prev => ({ ...prev, remoteFilter: e.target.value }))}
+          >
+            {REMOTE_OPTIONS.map(opt => <option key={opt || 'all'} value={opt}>{opt || 'any mode'}</option>)}
+          </select>
+          <input
+            className="form-input"
+            type="number"
+            min="1"
+            max="25"
+            value={filters.limit}
+            onChange={(e) => setFilters(prev => ({ ...prev, limit: e.target.value }))}
+          />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.65rem', flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', color: 'var(--muted)', fontSize: '0.73rem' }}>
+            <input
+              type="checkbox"
+              checked={filters.includeAdjacent}
+              onChange={(e) => setFilters(prev => ({ ...prev, includeAdjacent: e.target.checked }))}
+            />
+            Include adjacent role keywords
+          </label>
+          <div style={{ display: 'flex', gap: '0.45rem' }}>
+            <button className="apply-btn" onClick={resetFilters}>Reset</button>
+            <button className="apply-btn" onClick={applyFilters}>Apply</button>
+          </div>
+        </div>
+      </div>
+
+      {data && (
+        <div style={{ marginBottom: '0.8rem', fontSize: '0.72rem', color: 'var(--muted)' }}>
+          Showing {data.total_after_filter ?? (data.jobs?.length || 0)} of {data.total_fetched ?? (data.jobs?.length || 0)} fetched jobs
+          {(data.keywords_used && data.keywords_used.length) ? ` across ${data.keywords_used.length} keyword${data.keywords_used.length > 1 ? 's' : ''}` : ''}
+          {data.filter_mode ? ` · ${data.filter_mode} mode` : ''}
+        </div>
+      )}
 
       {/* Search params used */}
       {data?.search_params && (
@@ -777,11 +1029,26 @@ function LinkedInTab({ showToast }) {
           {data.search_params.experienceLevel && <span className="jtag">🎓 {data.search_params.experienceLevel}</span>}
           {data.search_params.jobType && <span className="jtag">💼 {data.search_params.jobType}</span>}
           {data.search_params.remoteFilter && <span className="jtag">🌐 {data.search_params.remoteFilter}</span>}
+          {Array.isArray(data.search_params.adjacentKeywords) && data.search_params.adjacentKeywords.length > 0 && (
+            <span className="jtag" style={{ color: '#4d9fff', borderColor: 'rgba(77,159,255,0.25)' }}>🧩 +{data.search_params.adjacentKeywords.length} adjacent</span>
+          )}
           {data.cached_at && (
             <span style={{ marginLeft: 'auto', fontSize: '0.67rem', color: 'var(--muted)' }}>
               {data.from_cache ? 'cached' : 'fresh'} · {new Date(data.cached_at).toLocaleTimeString()}
             </span>
           )}
+        </div>
+      )}
+
+      {data?.rate_limit_warning && (
+        <div style={{ marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'rgba(255,92,135,0.07)', border: '1px solid rgba(255,92,135,0.25)', borderRadius: 10, fontSize: '0.73rem', color: 'var(--accent3)' }}>
+          ⏱️ {data.rate_limit_warning}
+        </div>
+      )}
+
+      {data?.filter_warning && (
+        <div style={{ marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'rgba(240,180,41,0.08)', border: '1px solid rgba(240,180,41,0.25)', borderRadius: 10, fontSize: '0.73rem', color: '#f0b429' }}>
+          {data.filter_warning}
         </div>
       )}
 
@@ -825,6 +1092,8 @@ function LinkedInTab({ showToast }) {
                   <div style={{ marginTop: '0.35rem', display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                     {job.agoTime && <span className="jtag" style={{ color: 'var(--accent)', borderColor: 'rgba(0,229,160,0.2)' }}>🕐 {job.agoTime}</span>}
                     {job.salary && job.salary !== '' && <span className="jtag" style={{ color: '#f0b429', borderColor: 'rgba(240,180,41,0.2)' }}>💰 {job.salary}</span>}
+                    {typeof job.relevance_score === 'number' && <span className="jtag" style={{ color: '#4d9fff', borderColor: 'rgba(77,159,255,0.25)' }}>🎯 {job.relevance_score}%</span>}
+                    {job.search_keyword && <span className="jtag">🔍 {job.search_keyword}</span>}
                   </div>
                 </div>
                 <div className="job-right" style={{ alignItems: 'flex-end', gap: '0.4rem' }}>

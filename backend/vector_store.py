@@ -106,99 +106,175 @@ class VectorStore:
 
         if self.enabled and self._embedding_function is not None:
             try:
-                return self._chunked_similarity(text_a, text_b)
+                embed_score = self._chunked_similarity(text_a, text_b)
+                precise_score = self._precise_score(text_a, text_b)
+                # Blend: embeddings capture semantic proximity; PRECISE adds
+                # skill-taxonomy discriminability for sparse JD descriptions.
+                blended = 0.65 * embed_score + 0.35 * precise_score
+                return round(min(100.0, blended), 2)
             except Exception:
                 pass
 
-        # Weighted keyword coverage fallback — reliable, cost-free, no external calls.
-        return self._skill_coverage_score(text_a, text_b)
+        # PRECISE engine fallback — reliable, cost-free, no external calls.
+        return self._precise_score(text_a, text_b)
 
     # -- Internal helpers --------------------------------------------------
 
-    def _skill_coverage_score(self, resume_text: str, target_text: str) -> float:
+    def _precise_score(self, resume_text: str, target_text: str) -> float:
         """
-        Weighted keyword coverage scorer for JD-vs-resume matching.
+        PRECISE v3 — profile-role scoring with stronger discrimination.
 
-        Extracts meaningful terms from the target description, weights technical
-        terms (stack names, tools, acronyms) 2.5x over generic words, and
-        measures weighted recall against the full resume text.
-
-        Calibration uses a power curve (coverage^0.65 * 96) that expands the
-        mid-range so partial matches score proportionally:
-            40% keyword match  → ~54 / 100
-            60% keyword match  → ~70 / 100
-            75% keyword match  → ~80 / 100
-            90% keyword match  → ~89 / 100
-
-        A role-title bonus (+4 pts) rewards resumes that explicitly state the
-        target role (e.g. "Backend Developer" in a Backend Developer search).
+        Dimensions:
+            A. Skill group coverage (JD-specific, dominant weight)
+            B. Experience quality (resume quality, capped)
+            C. Role alignment (title overlap)
         """
-        # Generic words that carry no signal in a JD/resume match
-        STOPWORDS = {
-            'a','an','the','and','or','of','in','to','for','with','on','at','by',
-            'from','is','are','was','were','be','been','being','have','has','had',
-            'will','would','could','should','may','might','must','shall','can',
-            'do','does','did','not','no','nor','so','as','if','its','it',
-            'this','that','these','those','our','your','their','we','you',
-            'they','he','she','i','any','all','both','each','few','more',
-            'most','other','some','such','only','own','same','than','too',
-            'very','into','through','during','including','across','within',
-            'between','under','over','above','also','new','well','role',
-            'description','responsibilities','requirements','experience',
-            'knowledge','skills','skill','ability','understanding','strong',
-            'solid','good','best','key','main','various','multiple','large',
-            'small','high','low','help','team','teams','senior','junior',
-            'build','building','work','working','develop','developing',
-            'design','manage','managing','support','contribute','contributing',
-            'implement','write','create','use','ensure','enable','allow',
-            'participate','collaborate','maintain','monitor','integrate',
-            'required','preferred','plus','advantage','expected','needed',
-        }
-
         resume_lower = resume_text.lower()
         target_lower = target_text.lower()
 
-        # Split on whitespace and common punctuation (keep internal . + # / -)
-        raw_tokens = re.findall(r"[a-z0-9][a-z0-9_.+#/-]*", target_lower)
+        # Extract role upfront — used for sparse-JD inference and role alignment.
+        _role_m = re.search(r"role:\s*([^.]+)", target_lower)
+        role_raw = _role_m.group(1).strip() if _role_m else ""
 
-        total_weight  = 0.0
-        matched_weight = 0.0
-        seen: set[str] = set()
+        # ── A. Skill Group Coverage ──────────────────────────────────────────
+        TAXONOMY: dict[str, tuple[float, frozenset]] = {
+            "prog_lang":    (0.15, frozenset({"python","java","javascript","typescript","golang","rust","kotlin","swift","c#","ruby","php","scala","bash","perl"})),
+            "web_backend":  (0.12, frozenset({"django","fastapi","flask","express","spring","rails","laravel","nestjs","fastify","gin","fiber","actix","hapi","koa","node.js","nodejs"})),
+            "web_frontend": (0.06, frozenset({"react","vue","angular","svelte","nextjs","nuxt","ember","backbone","jquery","gatsby","remix"})),
+            "db_sql":       (0.08, frozenset({"postgresql","mysql","sqlite","mariadb","mssql","oracle","postgres"})),
+            "db_nosql":     (0.06, frozenset({"mongodb","redis","cassandra","dynamodb","elasticsearch","couchdb","firestore","neo4j"})),
+            "cloud":        (0.07, frozenset({"aws","gcp","azure","s3","ec2","lambda","cloudrun","firebase","heroku","digitalocean","vercel","netlify"})),
+            "devops":       (0.10, frozenset({"docker","kubernetes","terraform","ansible","jenkins","helm","ci/cd","cicd","github-actions"})),
+            "api_arch":     (0.08, frozenset({"graphql","grpc","microservices","websocket","kafka","rabbitmq","celery"})),
+            "security":     (0.04, frozenset({"authentication","authorization","oauth","jwt","ssl","tls","encryption","owasp","rbac","saml"})),
+            "testing":      (0.05, frozenset({"pytest","jest","unittest","mocha","jasmine","cypress","selenium","tdd","bdd","coverage"})),
+            "ai_ml":        (0.04, frozenset({"pytorch","tensorflow","scikit-learn","llm","rag","langchain","mlops","transformers","embeddings","huggingface","keras"})),
+            "vcs":          (0.04, frozenset({"git","github","gitlab","bitbucket"})),
+            "mobile":       (0.04, frozenset({"react-native","flutter","android","ios","xcode","gradle"})),
+            "data":         (0.07, frozenset({"pandas","numpy","spark","hadoop","airflow","dbt","tableau","powerbi","looker","etl"})),
+        }
 
-        for tok in raw_tokens:
-            if len(tok) < 3 or tok in STOPWORDS or tok in seen:
+        relevant_weight = 0.0
+        matched_weight  = 0.0
+
+        for _group, (weight, members) in TAXONOMY.items():
+            jd_hits = {m for m in members
+                       if re.search(r"\b" + re.escape(m) + r"\b", target_lower)}
+            if not jd_hits:
                 continue
-            seen.add(tok)
+            relevant_weight += weight
+            resume_hits = {m for m in jd_hits
+                           if re.search(r"\b" + re.escape(m) + r"\b", resume_lower)}
+            if resume_hits:
+                # Partial credit: if JD lists many items in a group, resume must
+                # cover more than one to earn full group weight.
+                matched_weight += weight * (len(resume_hits) / len(jd_hits))
 
-            # Technical terms: contain non-alpha chars (e.g. node.js, ci/cd,
-            # c++, aws) OR are 6+ character domain words (microservices,
-            # kubernetes, postgresql, authentication…)
-            is_tech = bool(re.search(r"[0-9_.+#/-]", tok)) or len(tok) >= 6
-            weight = 2.5 if is_tech else 1.0
-            total_weight += weight
+        if relevant_weight > 0:
+            skill_score = (matched_weight / relevant_weight) * 100.0
+        elif role_raw:
+            # Sparse JD: infer expected skill groups from the role title so
+            # PRECISE stays discriminative even when the description has no keywords.
+            skill_score = self._infer_skill_score(role_raw, resume_lower, TAXONOMY)
+        else:
+            skill_score = 50.0
 
-            if re.search(r"\b" + re.escape(tok) + r"\b", resume_lower):
-                matched_weight += weight
+        # ── B. Experience Quality Signal ─────────────────────────────────────
+        EXP_SIGNALS: list[tuple[str, float]] = [
+            (r"\b\d+\s*%",                                                              6.0),
+            (r"\b(backend|front.end|full.stack|software|data)\s+(engineer|developer|architect)\b", 5.0),
+            (r"\b(microservices?|distributed|scalable|high.performance)\b",             4.0),
+            (r"\b\d{1,3}[,\s]?\d{3}\b|\b\d+\s*k\b|\bmillion\b|\bthousand\b",         4.0),
+            (r"\b(reduc|improv|increas|optimiz|decreas)\w*\b",                          3.0),
+            (r"\b(production|deployed|live|prod)\b",                                    3.0),
+            (r"\b(led|managed|mentored|coordinated)\b",                                 3.0),
+            (r"\b(concurren|parallel|async|asynchronous)\w*\b",                        3.0),
+            (r"\b(b\.?tech|bachelor|master|phd|m\.?tech)\b",                          3.0),
+            (r"\b(projects?|capstone|hackathon)\b",                                     3.0),
+            (r"\b(designed|architected|built|engineered|developed|implemented|created)\b", 2.0),
+            (r"\b(code.reviews?|pull.requests?|code.quality)\b",                       2.0),
+            (r"\b(certification|certified|certificate|coursera|udemy|edx)\b",           2.0),
+            (r"\b(open.source|github)\b",                                               2.0),
+            (r"\b(leetcode|hackerrank|codechef|competitive)\b",                         2.0),
+            (r"\b(intern|internship)\b",                                                2.0),
+            (r"\b(rag|llm|langchain|machine.learning|deep.learning)\b",                 2.0),
+        ]
 
-        if total_weight == 0:
-            return 0.0
+        exp_raw = sum(pts for pattern, pts in EXP_SIGNALS
+                      if re.search(pattern, resume_lower))
+        # Cap experience contribution so role-agnostic quality signals do not
+        # dominate JD-specific skill fit.
+        exp_score = min(70.0, (exp_raw / 20.0) * 100.0)
 
-        coverage = matched_weight / total_weight  # [0.0, 1.0]
-
-        # Power calibration: sub-linear so partial matches are not crushed
-        base = min(96.0, (coverage ** 0.65) * 96.0)
-
-        # Role-title bonus: reward resumes that name the target role directly
-        role_match = re.search(r"role:\s*([^.]+)", target_lower)
-        if role_match:
-            role_words = role_match.group(1).strip().split()
-            role_words = [w for w in role_words if w not in STOPWORDS and len(w) > 2]
+        # ── C. Role Alignment ────────────────────────────────────────────────
+        if role_raw:
+            ROLE_STOP = {"and","or","the","a","an","of","in","to","for","with",
+                         "entry","senior","junior","lead","staff","principal","mid"}
+            role_words = [w for w in re.findall(r"[a-z]+", role_raw)
+                          if w not in ROLE_STOP and len(w) > 2]
             if role_words:
-                hits = sum(1 for w in role_words if re.search(r"\b" + re.escape(w) + r"\b", resume_lower))
-                role_bonus = (hits / len(role_words)) * 4.0
-                base = min(100.0, base + role_bonus)
+                hits = sum(1 for w in role_words
+                           if re.search(r"\b" + re.escape(w) + r"\b", resume_lower))
+                role_score = (hits / len(role_words)) * 100.0
+            else:
+                role_score = 50.0
+        else:
+            role_score = 50.0
 
-        return round(base, 2)
+        # ── Combine and calibrate ────────────────────────────────────────────
+        # Skill fit stays dominant for role discrimination.
+        raw = 0.75 * skill_score + 0.12 * exp_score + 0.13 * role_score
+        calibrated = min(100.0, raw * 1.05)
+        return round(calibrated, 2)
+
+    def _infer_skill_score(self, role_raw: str, resume_lower: str, taxonomy: dict) -> float:
+        """
+        Infer relevant skill groups from the role title and score the resume
+        against those groups when the JD contains no explicit skill keywords.
+        """
+        ROLE_SKILL_INFERENCE: dict[str, frozenset] = {
+            "backend":          frozenset({"prog_lang", "web_backend", "db_sql", "db_nosql", "devops", "api_arch", "vcs"}),
+            "frontend":         frozenset({"web_frontend", "prog_lang", "vcs"}),
+            "fullstack":        frozenset({"prog_lang", "web_backend", "web_frontend", "db_sql", "devops", "vcs"}),
+            "full stack":       frozenset({"prog_lang", "web_backend", "web_frontend", "db_sql", "devops", "vcs"}),
+            "data analyst":     frozenset({"data", "prog_lang", "db_sql"}),
+            "data scientist":   frozenset({"ai_ml", "data", "prog_lang"}),
+            "ml engineer":      frozenset({"ai_ml", "prog_lang", "data"}),
+            "machine learning": frozenset({"ai_ml", "prog_lang", "data"}),
+            "devops":           frozenset({"devops", "cloud", "vcs"}),
+            "sre":              frozenset({"devops", "cloud", "vcs"}),
+            "security":         frozenset({"security", "prog_lang"}),
+            "mobile":           frozenset({"mobile", "prog_lang"}),
+            "android":          frozenset({"mobile", "prog_lang"}),
+            "ios":              frozenset({"mobile", "prog_lang"}),
+        }
+
+        inferred_groups: set[str] = set()
+        role_lower = role_raw.lower()
+        for role_key, groups in ROLE_SKILL_INFERENCE.items():
+            if role_key in role_lower:
+                inferred_groups |= groups
+
+        if not inferred_groups:
+            return 50.0  # No inference possible — neutral default
+
+        inferred_relevant = 0.0
+        inferred_matched = 0.0
+        for group_name in inferred_groups:
+            if group_name not in taxonomy:
+                continue
+            weight, members = taxonomy[group_name]
+            inferred_relevant += weight
+            resume_hits = {m for m in members
+                           if re.search(r"\b" + re.escape(m) + r"\b", resume_lower)}
+            if resume_hits:
+                # Soft coverage: having 2+ skills from a group earns full weight.
+                coverage = min(1.0, len(resume_hits) / 2)
+                inferred_matched += weight * coverage
+
+        if inferred_relevant == 0:
+            return 50.0
+        return (inferred_matched / inferred_relevant) * 100.0
 
     def _cosine_from_vecs(self, emb_a, emb_b) -> float:
         """Cosine similarity in [0, 100] from two pre-computed embeddings."""
@@ -246,9 +322,9 @@ class VectorStore:
         scores = [self._cosine_from_vecs(e, target_emb) for e in chunk_embs]
         top3   = sorted(scores, reverse=True)[:3]
         raw    = 0.65 * top3[0] + 0.35 * (sum(top3) / len(top3))
-        # Calibrate: practical ceiling for MiniLM resume-vs-JD cosine is ~0.72.
-        # Mapping [0, 72] → [0, 100] gives intuitive scores without distorting rank order.
-        calibrated = min(100.0, raw * (100.0 / 72.0))
+        # Calibrate: practical ceiling for MiniLM resume-vs-JD cosine is ~0.52.
+        # Mapping [0, 52] → [0, 100] gives more useful scores for role-specific JDs.
+        calibrated = min(100.0, raw * (100.0 / 52.0))
         return round(calibrated, 2)
 
 

@@ -5,12 +5,13 @@ import logging
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 logger = logging.getLogger(__name__)
 
 import models
-from utils import analyze_resume, compute_final_score, extract_text_from_pdf
+import schemas
+from utils import analyze_resume, compute_final_score, extract_text_from_pdf, generate_resume_insights
 from vector_store import vector_store
 from .common import (
     MAX_UPLOAD_MB,
@@ -225,11 +226,22 @@ def upload_resume_v2(
     target_description = (job_description or (template.description if template else "") or "").strip()
     target_text = build_scoring_target(target_role, target_description)
 
+    # Resolve penalty context once so all scoring paths use the same logic.
+    resolved_recruiter_id = recruiter_id
+    if resolved_recruiter_id is None and template and template.created_by:
+        owner = db.query(models.UserDB).filter(models.UserDB.id == template.created_by).first()
+        if owner and owner.role == "recruiter":
+            resolved_recruiter_id = owner.id
+    resolved_listing_id = listing_id
+
     analysis = f"V2 deterministic scoring target role: {target_role or 'General Role'}"
     score = 0
     breakdown = {
         "vector_score": 0.0,
         "penalty_total": 0,
+        "boost_total": 0,
+        "structural_bonus": 0,
+        "structural_signals": [],
         "missing_keywords": [],
         "found_keywords": [],
         "final_score": 0,
@@ -237,6 +249,39 @@ def upload_resume_v2(
         "scoring_version": "v2",
         "fallback_reason": "missing_target",
     }
+
+    # Determine best-fit role by scoring against all active templates
+    def _compute_best_fit_role(text_for_scoring: str) -> str:
+        all_templates = (
+            db.query(models.ScoringTemplate)
+            .filter(models.ScoringTemplate.is_active == True)
+            .all()
+        )
+        best_role = target_role
+        best_score = -1
+        target_role_score = None
+        probe = models.Resume(parsed_text=text_for_scoring, analysis="", score=0, suggested_role="")
+        for t in all_templates:
+            t_text = build_scoring_target(t.role_title, t.description or "")
+            if not t_text.strip():
+                continue
+            t_breakdown = score_resume_against_target(
+                db,
+                probe,
+                target_text=t_text,
+                recruiter_id=resolved_recruiter_id,
+                listing_id=resolved_listing_id,
+            )
+            if t_breakdown["final_score"] > best_score:
+                best_score = t_breakdown["final_score"]
+                best_role = t.role_title
+            if target_role and t.role_title.strip().lower() == target_role.strip().lower():
+                target_role_score = t_breakdown["final_score"]
+
+        # Tie-breaker: keep the user-selected role when scores are effectively tied.
+        if target_role and target_role_score is not None and (best_score - target_role_score) <= 2:
+            return target_role
+        return best_role
 
     file_hash = hashlib.sha256(file_bytes).hexdigest()
     existing_resume = (
@@ -252,9 +297,11 @@ def upload_resume_v2(
             temp_resume = models.Resume(parsed_text=existing_text, analysis=analysis, score=0, suggested_role=target_role)
             breakdown = score_resume_against_target(
                 db, temp_resume, target_text=target_text,
-                recruiter_id=recruiter_id, listing_id=listing_id,
+                recruiter_id=resolved_recruiter_id, listing_id=resolved_listing_id,
             )
             score = breakdown["final_score"]
+
+        best_fit_role = _compute_best_fit_role(existing_text)
 
         db.query(models.Resume).filter(models.Resume.user_id == user_id).update({"is_active": False})
         existing_resume.is_active = True
@@ -262,7 +309,7 @@ def upload_resume_v2(
         existing_resume.deleted_at = None
         existing_resume.score = score
         existing_resume.analysis = analysis
-        existing_resume.suggested_role = target_role
+        existing_resume.suggested_role = best_fit_role
         existing_resume.scoring_engine = breakdown["scoring_engine"]
         existing_resume.scoring_version = "v2"
         existing_resume.score_breakdown_json = json.dumps(breakdown)
@@ -281,7 +328,7 @@ def upload_resume_v2(
             "score": score,
             "final_score": score,
             "analysis": analysis,
-            "suggested_role": target_role,
+            "suggested_role": best_fit_role,
             "vector_score": breakdown["vector_score"],
             "penalty_total": breakdown["penalty_total"],
             "missing_keywords": breakdown["missing_keywords"],
@@ -299,10 +346,12 @@ def upload_resume_v2(
             db,
             temp_resume,
             target_text=target_text,
-            recruiter_id=recruiter_id,
-            listing_id=listing_id,
+            recruiter_id=resolved_recruiter_id,
+            listing_id=resolved_listing_id,
         )
         score = breakdown["final_score"]
+
+    best_fit_role = _compute_best_fit_role(resume_text)
 
     db.query(models.Resume).filter(models.Resume.user_id == user_id).update({"is_active": False})
     resume = models.Resume(
@@ -313,7 +362,7 @@ def upload_resume_v2(
         score=score,
         analysis=analysis,
         parsed_text=resume_text,
-        suggested_role=target_role,
+        suggested_role=best_fit_role,
         is_active=True,
         mime_type=file.content_type or "application/pdf",
         file_size=len(file_bytes),
@@ -348,7 +397,7 @@ def upload_resume_v2(
         "score": score,
         "final_score": score,
         "analysis": analysis,
-        "suggested_role": target_role,
+        "suggested_role": best_fit_role,
         "vector_score": breakdown["vector_score"],
         "penalty_total": breakdown["penalty_total"],
         "missing_keywords": breakdown["missing_keywords"],
@@ -358,6 +407,58 @@ def upload_resume_v2(
         "fallback_reason": breakdown.get("fallback_reason"),
         "template_id": template_id,
         "template_title": template.title if template else None,
+    }
+
+
+@router.post("/resume-insights", tags=["Resumes"], response_model=schemas.ResumeInsightsResponse)
+def resume_insights(payload: schemas.ResumeInsightsRequest, user_id: int, db=Depends(get_db)):
+    user = get_user_or_404(db, user_id)
+    if user.role != "applicant":
+        raise HTTPException(status_code=403, detail="Only applicants can generate resume insights")
+
+    resume = (
+        db.query(models.Resume)
+        .filter(
+            models.Resume.id == payload.resume_id,
+            models.Resume.user_id == user_id,
+            models.Resume.is_deleted == False,
+        )
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    resume_text = get_resume_text_for_scoring(resume)
+    if not resume_text.strip():
+        raise HTTPException(status_code=400, detail="No parsed resume text available for insights")
+
+    insights = generate_resume_insights(
+        resume_text=resume_text,
+        role_mode=payload.role_mode,
+        target_role=payload.target_role,
+        suggested_role=resume.suggested_role or "",
+    )
+
+    log_audit(
+        db,
+        "resume.insights",
+        actor_id=user_id,
+        target_type="resume",
+        target_id=resume.id,
+        detail=f"mode={insights['role_mode']};target={insights['target_role']};source={insights.get('source', 'unknown')}",
+    )
+
+    return {
+        "resume_id": resume.id,
+        "role_mode": insights["role_mode"],
+        "target_role": insights["target_role"],
+        "suggested_role": resume.suggested_role or "",
+        "headline": insights["headline"],
+        "sections": insights["sections"],
+        "action_plan": insights["action_plan"],
+        "source": insights.get("source", "llm"),
+        "note": insights.get("note", ""),
+        "generated_at": datetime.utcnow(),
     }
 
 

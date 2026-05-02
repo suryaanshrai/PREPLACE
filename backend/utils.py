@@ -4,6 +4,7 @@ from google import genai
 import pdfplumber
 import time
 import re
+from typing import Any
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -293,6 +294,81 @@ Resume:
 _EXPERIENCE_LEVELS = {"internship", "entry level", "associate", "senior", "director", "executive"}
 _JOB_TYPES = {"full time", "part time", "contract", "temporary", "volunteer", "internship"}
 _REMOTE_FILTERS = {"on-site", "on site", "remote", "hybrid"}
+_MAX_ADJACENT_KEYWORDS = 7
+
+
+def _normalize_keyword(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())[:80]
+
+
+def _dedupe_keywords(candidates: list[str], primary: str = "", limit: int = 5) -> list[str]:
+    seen = set()
+    out = []
+    primary_lower = (primary or "").strip().lower()
+    for candidate in candidates:
+        kw = _normalize_keyword(candidate)
+        if not kw:
+            continue
+        lower = kw.lower()
+        if lower == primary_lower or lower in seen:
+            continue
+        seen.add(lower)
+        out.append(kw)
+        if len(out) >= max(1, min(limit, _MAX_ADJACENT_KEYWORDS)):
+            break
+    return out
+
+
+def _extract_suggested_role(analysis_text: str) -> str:
+    if not analysis_text:
+        return ""
+    role_match = re.search(r"Suggested Role:\s*(.+)", analysis_text, re.IGNORECASE)
+    if role_match:
+        return _normalize_keyword(role_match.group(1).rstrip("."))
+    return ""
+
+
+def _fallback_linkedin_keywords(resume_text: str, analysis_text: str) -> tuple[str, list[str]]:
+    """Build deterministic role-centric keyword fallbacks when LLM output is unavailable."""
+    primary = _extract_suggested_role(analysis_text)
+    lowered = f"{analysis_text}\n{resume_text}".lower()
+
+    if not primary:
+        role_rules = [
+            ("backend", "Backend Developer"),
+            ("fastapi", "Backend Developer"),
+            ("django", "Backend Developer"),
+            ("flask", "Backend Developer"),
+            ("react", "Frontend Developer"),
+            ("frontend", "Frontend Developer"),
+            ("ui", "UI/UX Designer"),
+            ("ux", "UI/UX Designer"),
+            ("data analyst", "Data Analyst"),
+            ("machine learning", "ML Engineer"),
+            ("devops", "DevOps Engineer"),
+            ("product", "Product Manager"),
+        ]
+        for token, role in role_rules:
+            if token in lowered:
+                primary = role
+                break
+
+    if not primary:
+        primary = "Software Engineer"
+
+    adjacency_map = {
+        "backend developer": ["Backend Engineer", "Python Developer", "API Developer", "Software Engineer"],
+        "frontend developer": ["Frontend Engineer", "React Developer", "UI Developer", "Software Engineer"],
+        "full-stack developer": ["Full Stack Engineer", "Software Engineer", "Backend Developer", "Frontend Developer"],
+        "data analyst": ["Business Analyst", "Data Associate", "Analytics Engineer", "Junior Data Analyst"],
+        "ml engineer": ["Machine Learning Engineer", "Data Scientist", "AI Engineer", "NLP Engineer"],
+        "devops engineer": ["Site Reliability Engineer", "Platform Engineer", "Cloud Engineer", "Infrastructure Engineer"],
+        "ui/ux designer": ["Product Designer", "UX Designer", "UI Designer", "Visual Designer"],
+        "software engineer": ["Software Developer", "Backend Developer", "Full Stack Developer", "Application Engineer"],
+    }
+
+    adjacent = adjacency_map.get(primary.lower(), ["Software Engineer", "Backend Developer", "Frontend Developer"])
+    return primary, _dedupe_keywords(adjacent, primary=primary, limit=5)
 
 
 def get_linkedin_search_params(resume_text: str, analysis_text: str = "") -> dict:
@@ -301,12 +377,14 @@ def get_linkedin_search_params(resume_text: str, analysis_text: str = "") -> dic
     Returns a dict with keys: keyword, location, experienceLevel, jobType, remoteFilter.
     Falls back to safe defaults if Gemini is unavailable or returns unparseable output.
     """
+    fallback_keyword, fallback_adjacent = _fallback_linkedin_keywords(resume_text, analysis_text)
     defaults = {
-        "keyword": "",
+        "keyword": fallback_keyword,
         "location": "",
         "experienceLevel": "entry level",
         "jobType": "",
         "remoteFilter": "",
+        "adjacentKeywords": fallback_adjacent,
     }
 
     if client is None:
@@ -322,6 +400,7 @@ def get_linkedin_search_params(resume_text: str, analysis_text: str = "") -> dic
 
 Return ONLY a valid JSON object with these exact keys (no markdown, no explanation):
 - "keyword": a concise job title or skill keyword (e.g. "Software Engineer", "Data Analyst", "React Developer")
+- "adjacentKeywords": an array of 3-7 closely related role keywords; keep in same role family and avoid unrelated domains
 - "location": the candidate's city/country if mentioned, otherwise empty string
 - "experienceLevel": one of: internship, entry level, associate, senior, director, executive
 - "jobType": one of: full time, part time, contract, temporary, volunteer, internship — or empty string
@@ -346,8 +425,18 @@ JSON output only:"""
                 parsed = json.loads(raw)
 
                 result = dict(defaults)
-                result["keyword"] = str(parsed.get("keyword", "")).strip()[:100]
+                result["keyword"] = _normalize_keyword(str(parsed.get("keyword", ""))) or fallback_keyword
                 result["location"] = str(parsed.get("location", "")).strip()[:100]
+
+                raw_adjacent = parsed.get("adjacentKeywords", parsed.get("adjacent_keywords", []))
+                if isinstance(raw_adjacent, list):
+                    result["adjacentKeywords"] = _dedupe_keywords(
+                        [str(item) for item in raw_adjacent],
+                        primary=result["keyword"],
+                        limit=5,
+                    )
+                else:
+                    result["adjacentKeywords"] = list(fallback_adjacent)
 
                 exp = str(parsed.get("experienceLevel", "")).strip().lower()
                 if exp in _EXPERIENCE_LEVELS:
@@ -373,4 +462,312 @@ JSON output only:"""
                 break
 
     return defaults
+
+
+def _clean_json_text(raw: str) -> str:
+    """Strip code fences so model output can be safely parsed as JSON."""
+    cleaned = re.sub(r"```(?:json)?", "", raw or "")
+    return cleaned.strip().strip("`").strip()
+
+
+def _fallback_resume_insights(
+    resume_text: str,
+    role_mode: str,
+    target_role: str,
+    suggested_role: str,
+    note: str,
+) -> dict[str, Any]:
+    """Return deterministic guidance when LLM output is unavailable."""
+    lowered = (resume_text or "").lower()
+    has_projects = any(k in lowered for k in ["project", "built", "developed", "implemented"])
+    has_metrics = bool(re.search(r"\b\d+\s*[%x]|\b\d{2,}\b", lowered))
+    has_keywords = any(k in lowered for k in ["python", "java", "react", "sql", "aws", "docker"])
+
+    resolved_role = (target_role or suggested_role or "General Role").strip()
+    mode = "targeted" if role_mode == "targeted" else "general"
+
+    sections = [
+        {
+            "title": "Role Alignment",
+            "summary": f"Guidance tuned for {resolved_role} in {mode} mode.",
+            "insights": [
+                "Resume should mirror the role title and primary competency keywords.",
+                "Top skills should appear in summary, experience, and projects sections.",
+            ],
+            "actionable_steps": [
+                f"Add a role-focused headline aligned to {resolved_role}.",
+                "Reorder bullets so role-relevant work appears first.",
+            ],
+        },
+        {
+            "title": "Experience Impact",
+            "summary": "Stronger impact statements improve recruiter confidence.",
+            "insights": [
+                "Quantified outcomes are easier to trust than task-only bullets.",
+                "Action-result format improves readability and ATS relevance.",
+            ],
+            "actionable_steps": [
+                "Rewrite each bullet as action + scope + measurable outcome.",
+                "Include delivery metrics such as latency, cost, quality, or growth.",
+            ],
+        },
+        {
+            "title": "Skills Coverage",
+            "summary": "Coverage across core tools should be explicit and current.",
+            "insights": [
+                "Missing tool keywords can reduce shortlist probability.",
+                "Skill-to-project mapping helps prove depth, not just familiarity.",
+            ],
+            "actionable_steps": [
+                "Map each listed skill to at least one project or work bullet.",
+                "Keep the skills section concise and grouped by domain.",
+            ],
+        },
+        {
+            "title": "ATS Readability",
+            "summary": "Formatting consistency prevents parser drop-offs.",
+            "insights": [
+                "Simple formatting helps ATS systems parse sections reliably.",
+                "Keyword stuffing hurts readability and can weaken human review.",
+            ],
+            "actionable_steps": [
+                "Use clear section headings and consistent date/location formatting.",
+                "Remove decorative icons/tables that can break text extraction.",
+            ],
+        },
+    ]
+
+    # Small deterministic personalization from resume content.
+    if not has_projects:
+        sections[1]["insights"].append("Projects appear underrepresented for role readiness.")
+        sections[1]["actionable_steps"].append("Add 2 project entries with stack, scope, and outcomes.")
+    if not has_metrics:
+        sections[1]["insights"].append("Most bullets may be descriptive without measurable impact.")
+        sections[1]["actionable_steps"].append("Add at least one metric to each experience/project section.")
+    if not has_keywords:
+        sections[2]["insights"].append("Core technical keywords are currently sparse.")
+        sections[2]["actionable_steps"].append("Add concrete tools used in coursework/projects/work.")
+
+    action_plan = [
+        {
+            "priority": "high",
+            "step": "Align resume headline and summary to the target role.",
+            "why_it_matters": "Improves role relevance in first-pass screening.",
+            "timeframe": "30-45 minutes",
+        },
+        {
+            "priority": "high",
+            "step": "Convert bullets into quantified impact statements.",
+            "why_it_matters": "Demonstrates ownership and measurable outcomes.",
+            "timeframe": "1-2 hours",
+        },
+        {
+            "priority": "medium",
+            "step": "Map each key skill to proof in project/experience bullets.",
+            "why_it_matters": "Reduces skill-claim ambiguity for recruiters.",
+            "timeframe": "45-60 minutes",
+        },
+        {
+            "priority": "medium",
+            "step": "Clean ATS formatting and heading consistency.",
+            "why_it_matters": "Improves parser success and scan speed.",
+            "timeframe": "30 minutes",
+        },
+    ]
+
+    return {
+        "headline": f"Actionable insights for {resolved_role}",
+        "role_mode": mode,
+        "target_role": resolved_role,
+        "sections": sections,
+        "action_plan": action_plan,
+        "source": "fallback",
+        "note": note,
+    }
+
+
+def _normalize_resume_insights(parsed: dict[str, Any], role_mode: str, target_role: str, suggested_role: str) -> dict[str, Any]:
+    """Normalize model output to a predictable contract for the frontend."""
+    resolved_role = (target_role or suggested_role or "General Role").strip()
+    mode = "targeted" if role_mode == "targeted" else "general"
+
+    headline = str(parsed.get("headline", "")).strip() or f"Actionable insights for {resolved_role}"
+
+    sections_raw = parsed.get("sections", [])
+    sections: list[dict[str, Any]] = []
+    if isinstance(sections_raw, list):
+        for item in sections_raw[:6]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip() or "Insights"
+            summary = str(item.get("summary", "")).strip()
+            insights = item.get("insights", [])
+            action_steps = item.get("actionable_steps", [])
+
+            if not isinstance(insights, list):
+                insights = [str(insights)] if insights else []
+            if not isinstance(action_steps, list):
+                action_steps = [str(action_steps)] if action_steps else []
+
+            insights = [str(x).strip() for x in insights if str(x).strip()][:5]
+            action_steps = [str(x).strip() for x in action_steps if str(x).strip()][:5]
+            sections.append(
+                {
+                    "title": title,
+                    "summary": summary,
+                    "insights": insights,
+                    "actionable_steps": action_steps,
+                }
+            )
+
+    action_plan_raw = parsed.get("action_plan", [])
+    action_plan: list[dict[str, str]] = []
+    if isinstance(action_plan_raw, list):
+        for item in action_plan_raw[:8]:
+            if not isinstance(item, dict):
+                continue
+            priority = str(item.get("priority", "medium")).strip().lower()
+            if priority not in {"high", "medium", "low"}:
+                priority = "medium"
+            step = str(item.get("step", "")).strip()
+            why = str(item.get("why_it_matters", "")).strip()
+            timeframe = str(item.get("timeframe", "")).strip()
+            if step:
+                action_plan.append(
+                    {
+                        "priority": priority,
+                        "step": step,
+                        "why_it_matters": why,
+                        "timeframe": timeframe,
+                    }
+                )
+
+    if not sections or not action_plan:
+        return _fallback_resume_insights(
+            resume_text="",
+            role_mode=mode,
+            target_role=resolved_role,
+            suggested_role=suggested_role,
+            note="LLM output was incomplete. Returned deterministic guidance.",
+        )
+
+    return {
+        "headline": headline,
+        "role_mode": mode,
+        "target_role": resolved_role,
+        "sections": sections,
+        "action_plan": action_plan,
+        "source": "llm",
+        "note": "",
+    }
+
+
+def generate_resume_insights(
+    resume_text: str,
+    role_mode: str = "general",
+    target_role: str = "",
+    suggested_role: str = "",
+) -> dict[str, Any]:
+    """Generate structured, actionable resume insights independent of score computation."""
+    mode = "targeted" if role_mode == "targeted" else "general"
+    resolved_role = (target_role or suggested_role or "General Role").strip()
+
+    if not (resume_text or "").strip():
+        return _fallback_resume_insights(
+            resume_text=resume_text,
+            role_mode=mode,
+            target_role=resolved_role,
+            suggested_role=suggested_role,
+            note="No resume text available for insights.",
+        )
+
+    if client is None:
+        return _fallback_resume_insights(
+            resume_text=resume_text,
+            role_mode=mode,
+            target_role=resolved_role,
+            suggested_role=suggested_role,
+            note="LLM service unavailable. Configure GEMINI_API_KEY to enable AI insights.",
+        )
+
+    prompt = f"""
+You are a senior resume reviewer and hiring coach.
+
+Task:
+Generate role-aware resume insights with targeted sections and practical actions.
+
+Mode: {mode}
+Target role: {resolved_role}
+
+Rules:
+- Return ONLY valid JSON.
+- Do not include markdown, code fences, or commentary.
+- Keep language concise and actionable.
+- Every section must include both insight bullets and action steps.
+- Prioritize actions by impact.
+
+Required JSON shape:
+{{
+  "headline": "short title",
+  "sections": [
+    {{
+      "title": "Role Alignment",
+      "summary": "one sentence",
+      "insights": ["...", "..."],
+      "actionable_steps": ["...", "..."]
+    }}
+  ],
+  "action_plan": [
+    {{
+      "priority": "high|medium|low",
+      "step": "specific task",
+      "why_it_matters": "short reason",
+      "timeframe": "estimated effort/time"
+    }}
+  ]
+}}
+
+Resume text:
+{resume_text[:4000]}
+"""
+
+    from google.genai.errors import ClientError, ServerError
+
+    models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    for model_name in models_to_try:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(model=model_name, contents=prompt)
+                raw = _clean_json_text(response.text or "")
+                parsed = json.loads(raw)
+                if not isinstance(parsed, dict):
+                    raise ValueError("LLM output is not a JSON object")
+                return _normalize_resume_insights(parsed, mode, resolved_role, suggested_role)
+            except (json.JSONDecodeError, ValueError):
+                break
+            except ClientError as e:
+                if e.code == 429:
+                    break
+                if e.code in (400, 401, 403):
+                    return _fallback_resume_insights(
+                        resume_text=resume_text,
+                        role_mode=mode,
+                        target_role=resolved_role,
+                        suggested_role=suggested_role,
+                        note="LLM request was rejected. Check API key or model access.",
+                    )
+                break
+            except ServerError:
+                if attempt == 0:
+                    time.sleep(2)
+            except Exception:
+                break
+
+    return _fallback_resume_insights(
+        resume_text=resume_text,
+        role_mode=mode,
+        target_role=resolved_role,
+        suggested_role=suggested_role,
+        note="LLM unavailable or returned malformed output. Returned deterministic guidance.",
+    )
 
