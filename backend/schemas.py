@@ -1,11 +1,13 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Literal, Optional, List
 from datetime import datetime
 
 class UserCreate(BaseModel):
     name: str
     email: str
-    password: str
+    password: str = Field(..., min_length=8)
+    # role is intentionally not exposed — /register always creates applicants.
+    # Kept for backwards-compat with clients that send it; the router ignores it.
     role: str = "applicant"
 
 class UserLogin(BaseModel): 
@@ -15,7 +17,7 @@ class UserLogin(BaseModel):
 class RecruiterRegister(BaseModel):
     name: str           # recruiter's name
     email: str
-    password: str
+    password: str = Field(..., min_length=8)
     company_name: str
     roles_hiring: str = ""
 
@@ -47,7 +49,7 @@ class JobListingUpdate(BaseModel):
 
 class ApplicationCreate(BaseModel):
     job_listing_id: int
-    action: str = "apply"  # apply | save
+    action: Literal["apply", "save"] = "apply"
     resume_id: Optional[int] = None
 
 

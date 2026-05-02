@@ -1,15 +1,23 @@
 from datetime import datetime
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 
 import models
 from schemas import PenaltyRulesUpsert, ScoringTemplateCreate, ScoringTemplateUpdate
+from security import get_current_user
 from vector_store import vector_store
 from .common import get_db, log_audit, to_iso, upsert_job_vector, upsert_resume_vector
 
 router = APIRouter()
+
+
+def _require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Dependency that enforces the caller has the 'admin' role."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
 
 
 def _serialize_penalty_rule(rule: models.PenaltyRule) -> dict:
@@ -24,7 +32,7 @@ def _serialize_penalty_rule(rule: models.PenaltyRule) -> dict:
 
 
 @router.get("/admin/recruiters", tags=["Admin"])
-def admin_get_recruiters(db=Depends(get_db)):
+def admin_get_recruiters(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     recruiters = db.query(models.UserDB).filter(models.UserDB.role == "recruiter").all()
     result = []
     for r in recruiters:
@@ -45,18 +53,21 @@ def admin_get_recruiters(db=Depends(get_db)):
 
 
 @router.patch("/admin/recruiters/{user_id}/status", tags=["Admin"])
-def admin_update_recruiter_status(user_id: int, status: str, db=Depends(get_db)):
+def admin_update_recruiter_status(user_id: int, status: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
     profile = db.query(models.RecruiterProfile).filter(models.RecruiterProfile.user_id == user_id).first()
     if not profile:
-        return {"error": "Recruiter profile not found"}
+        raise HTTPException(status_code=404, detail="Recruiter profile not found")
+    allowed_statuses = {"pending", "approved", "rejected"}
+    if status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(sorted(allowed_statuses))}")
     profile.status = status
     db.commit()
-    log_audit(db, "admin.recruiter_status", actor_id=1, target_type="recruiter_profile", target_id=profile.id, detail=f"status={status}")
+    log_audit(db, "admin.recruiter_status", actor_id=admin["user_id"], target_type="recruiter_profile", target_id=profile.id, detail=f"status={status}")
     return {"message": f"Recruiter status updated to {status}"}
 
 
 @router.delete("/admin/recruiters/{user_id}", tags=["Admin"])
-def admin_delete_recruiter(user_id: int, db=Depends(get_db)):
+def admin_delete_recruiter(user_id: int, admin: dict = Depends(_require_admin), db=Depends(get_db)):
     listing_ids = [x.id for x in db.query(models.JobListing).filter(models.JobListing.recruiter_id == user_id).all()]
     if listing_ids:
         db.query(models.Application).filter(models.Application.job_listing_id.in_(listing_ids)).delete()
@@ -67,12 +78,12 @@ def admin_delete_recruiter(user_id: int, db=Depends(get_db)):
     db.query(models.JobListing).filter(models.JobListing.recruiter_id == user_id).delete()
     db.query(models.UserDB).filter(models.UserDB.id == user_id).delete()
     db.commit()
-    log_audit(db, "admin.recruiter_delete", actor_id=1, target_type="user", target_id=user_id)
+    log_audit(db, "admin.recruiter_delete", actor_id=admin["user_id"], target_type="user", target_id=user_id)
     return {"message": "Recruiter deleted"}
 
 
 @router.get("/admin/job-listings", tags=["Admin"])
-def admin_get_all_job_listings(db=Depends(get_db)):
+def admin_get_all_job_listings(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     listings = db.query(models.JobListing).order_by(models.JobListing.id.desc()).all()
     result = []
     for l in listings:
@@ -104,20 +115,20 @@ def admin_get_all_job_listings(db=Depends(get_db)):
 
 
 @router.patch("/admin/job-listings/{listing_id}/status", tags=["Admin"])
-def admin_update_job_status(listing_id: int, status: str, db=Depends(get_db)):
+def admin_update_job_status(listing_id: int, status: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
     listing = db.query(models.JobListing).filter(models.JobListing.id == listing_id).first()
     if not listing:
-        return {"error": "Listing not found"}
+        raise HTTPException(status_code=404, detail="Listing not found")
     listing.status = status
     listing.updated_at = datetime.utcnow()
     db.commit()
     upsert_job_vector(db, listing)
-    log_audit(db, "admin.job_status", actor_id=1, target_type="job_listing", target_id=listing.id, detail=f"status={status}")
+    log_audit(db, "admin.job_status", actor_id=admin["user_id"], target_type="job_listing", target_id=listing.id, detail=f"status={status}")
     return {"message": f"Job listing status updated to {status}"}
 
 
 @router.get("/admin/stats", tags=["Admin"])
-def admin_stats(db=Depends(get_db)):
+def admin_stats(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     total_applicants = db.query(models.UserDB).filter(models.UserDB.role == "applicant").count()
     total_recruiters = db.query(models.UserDB).filter(models.UserDB.role == "recruiter").count()
     pending_recruiters = db.query(models.RecruiterProfile).filter(models.RecruiterProfile.status == "pending").count()
@@ -204,7 +215,7 @@ def applicant_analytics(user_id: int, db=Depends(get_db)):
 
 
 @router.get("/admin/audit-logs", tags=["Audit"])
-def get_admin_audit_logs(action: str = "", actor_id: int | None = None, limit: int = Query(100, ge=1, le=500), db=Depends(get_db)):
+def get_admin_audit_logs(action: str = "", actor_id: int | None = None, limit: int = Query(100, ge=1, le=500), admin: dict = Depends(_require_admin), db=Depends(get_db)):
     query = db.query(models.AuditLog)
     if action:
         query = query.filter(models.AuditLog.action == action)
@@ -226,7 +237,7 @@ def get_admin_audit_logs(action: str = "", actor_id: int | None = None, limit: i
 
 
 @router.get("/admin/scoring-templates", tags=["Admin"])
-def admin_get_scoring_templates(db=Depends(get_db)):
+def admin_get_scoring_templates(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     rows = db.query(models.ScoringTemplate).order_by(models.ScoringTemplate.id.desc()).all()
     return [
         {
@@ -243,7 +254,8 @@ def admin_get_scoring_templates(db=Depends(get_db)):
 
 
 @router.post("/admin/scoring-templates", tags=["Admin"])
-def admin_create_scoring_template(payload: ScoringTemplateCreate, admin_id: int = 1, db=Depends(get_db)):
+def admin_create_scoring_template(payload: ScoringTemplateCreate, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+    admin_id = admin["user_id"]
     row = models.ScoringTemplate(
         title=payload.title.strip(),
         role_title=payload.role_title.strip(),
@@ -260,10 +272,11 @@ def admin_create_scoring_template(payload: ScoringTemplateCreate, admin_id: int 
 
 
 @router.patch("/admin/scoring-templates/{template_id}", tags=["Admin"])
-def admin_update_scoring_template(template_id: int, payload: ScoringTemplateUpdate, admin_id: int = 1, db=Depends(get_db)):
+def admin_update_scoring_template(template_id: int, payload: ScoringTemplateUpdate, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+    admin_id = admin["user_id"]
     row = db.query(models.ScoringTemplate).filter(models.ScoringTemplate.id == template_id).first()
     if not row:
-        return {"error": "Template not found"}
+        raise HTTPException(status_code=404, detail="Template not found")
 
     patch = payload.model_dump(exclude_unset=True)
     for key, value in patch.items():
@@ -275,10 +288,11 @@ def admin_update_scoring_template(template_id: int, payload: ScoringTemplateUpda
 
 
 @router.delete("/admin/scoring-templates/{template_id}", tags=["Admin"])
-def admin_delete_scoring_template(template_id: int, admin_id: int = 1, db=Depends(get_db)):
+def admin_delete_scoring_template(template_id: int, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+    admin_id = admin["user_id"]
     row = db.query(models.ScoringTemplate).filter(models.ScoringTemplate.id == template_id).first()
     if not row:
-        return {"error": "Template not found"}
+        raise HTTPException(status_code=404, detail="Template not found")
     db.delete(row)
     db.commit()
     log_audit(db, "admin.template_delete", actor_id=admin_id, target_type="scoring_template", target_id=template_id)
@@ -286,7 +300,7 @@ def admin_delete_scoring_template(template_id: int, admin_id: int = 1, db=Depend
 
 
 @router.get("/admin/penalty-defaults", tags=["Admin"])
-def admin_get_penalty_defaults(db=Depends(get_db)):
+def admin_get_penalty_defaults(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     rules = (
         db.query(models.PenaltyRule)
         .filter(models.PenaltyRule.recruiter_id.is_(None), models.PenaltyRule.listing_id.is_(None))
@@ -299,7 +313,7 @@ def admin_get_penalty_defaults(db=Depends(get_db)):
 
 
 @router.post("/admin/reindex", tags=["Admin"])
-def admin_reindex_vectors(db=Depends(get_db)):
+def admin_reindex_vectors(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     """Re-upsert all resumes and jobs into ChromaDB.
 
     Run this after moving the app to a new machine where chroma_db/ is empty.
@@ -317,13 +331,14 @@ def admin_reindex_vectors(db=Depends(get_db)):
     for job in jobs:
         upsert_job_vector(db, job)
 
-    log_audit(db, "admin.reindex", actor_id=1, target_type="vector_store",
+    log_audit(db, "admin.reindex", actor_id=admin["user_id"], target_type="vector_store",
               detail=f"resumes={len(resumes)} jobs={len(jobs)}")
     return {"message": "Re-index complete", "resumes_indexed": len(resumes), "jobs_indexed": len(jobs)}
 
 
 @router.put("/admin/penalty-defaults", tags=["Admin"])
-def admin_upsert_penalty_defaults(payload: PenaltyRulesUpsert, admin_id: int = 1, db=Depends(get_db)):
+def admin_upsert_penalty_defaults(payload: PenaltyRulesUpsert, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+    admin_id = admin["user_id"]
     db.query(models.PenaltyRule).filter(
         models.PenaltyRule.recruiter_id.is_(None),
         models.PenaltyRule.listing_id.is_(None),

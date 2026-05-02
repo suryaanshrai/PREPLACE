@@ -438,6 +438,8 @@ def get_all_applicants(
     q: str = "",
     min_score: int = Query(0, ge=0, le=100),
     sort_by: str = Query("rank", pattern="^(rank|score|latest)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db=Depends(get_db),
 ):
     users = db.query(models.UserDB).filter(models.UserDB.role == "applicant").all()
@@ -477,4 +479,4 @@ def get_all_applicants(
     else:
         result.sort(key=lambda x: x["rank_score"], reverse=True)
 
-    return result
+    return result[offset: offset + limit]

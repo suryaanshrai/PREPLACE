@@ -41,11 +41,14 @@ class VectorStore:
             self.enabled = True
             logger.info("VectorStore: ChromaDB + sentence-transformers loaded successfully (model=%s)", EMBED_MODEL)
             print(f"[VectorStore] Semantic embeddings ENABLED — model={EMBED_MODEL}")
-        except Exception as exc:
+        except Exception:
             self.enabled = False
             self._embedding_function = None
-            logger.warning("VectorStore: ChromaDB unavailable — falling back to PRECISE scorer only. Reason: %s", exc)
-            print(f"[VectorStore] Semantic embeddings DISABLED — PRECISE-only fallback active. Reason: {exc}")
+            logger.exception(
+                "VectorStore: ChromaDB failed to initialize — falling back to PRECISE scorer only. "
+                "Scores will be based on keyword/taxonomy matching rather than semantic embeddings."
+            )
+            print("[VectorStore] Semantic embeddings DISABLED — PRECISE-only fallback active. Check logs for details.")
 
     def upsert_job(self, job_id: int, content: str, metadata: Dict):
         if not self.enabled:
@@ -140,7 +143,9 @@ class VectorStore:
         target_lower = target_text.lower()
 
         # Extract role upfront — used for sparse-JD inference and role alignment.
-        _role_m = re.search(r"role:\s*([^.]+)", target_lower)
+        # Use IGNORECASE so "Role:" and "role:" both match regardless of how
+        # job_vector_text() constructs the string.
+        _role_m = re.search(r"role:\s*([^.]+)", target_lower, re.IGNORECASE)
         role_raw = _role_m.group(1).strip() if _role_m else ""
 
         # ── A. Skill Group Coverage ──────────────────────────────────────────

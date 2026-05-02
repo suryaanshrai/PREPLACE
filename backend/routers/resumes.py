@@ -45,6 +45,10 @@ def upload_resume(user_id: int, file: UploadFile = File(...), db=Depends(get_db)
     if not file_bytes:
         return {"error": "Uploaded file is empty"}
 
+    # Validate by magic bytes (%PDF) — extension-only checks are trivially bypassed.
+    if not file_bytes[:4] == b"%PDF":
+        return {"error": "File content does not appear to be a valid PDF"}
+
     size_mb = len(file_bytes) / (1024 * 1024)
     if size_mb > MAX_UPLOAD_MB:
         return {"error": f"File too large. Max {MAX_UPLOAD_MB} MB"}
@@ -196,6 +200,10 @@ def upload_resume_v2(
     file_bytes = file.file.read()
     if not file_bytes:
         return {"error": "Uploaded file is empty"}
+
+    # Validate by magic bytes (%PDF) — extension-only checks are trivially bypassed.
+    if not file_bytes[:4] == b"%PDF":
+        return {"error": "File content does not appear to be a valid PDF"}
 
     size_mb = len(file_bytes) / (1024 * 1024)
     if size_mb > MAX_UPLOAD_MB:

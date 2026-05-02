@@ -1,12 +1,13 @@
 from datetime import datetime
 import os
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 import models
 from matching import compute_job_match, normalize_app_status
 from schemas import ApplicationCreate, ApplicationStatusUpdate, RecruiterNoteUpdate
+from security import get_current_user
 from utils import extract_skills_from_analysis
 from vector_store import vector_store
 from .common import (
@@ -22,6 +23,18 @@ from .common import (
 )
 
 router = APIRouter()
+
+
+def _require_recruiter(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "recruiter":
+        raise HTTPException(status_code=403, detail="Recruiter access required")
+    return user
+
+
+def _require_applicant(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "applicant":
+        raise HTTPException(status_code=403, detail="Applicant access required")
+    return user
 
 
 @router.post("/applications", tags=["Applications"])
@@ -169,16 +182,15 @@ def withdraw_application(application_id: int, user_id: int, db=Depends(get_db)):
 
 @router.get("/recruiter/applications", tags=["Applications"])
 def recruiter_applications(
-    recruiter_id: int,
     listing_id: int | None = None,
     status: str = "",
     q: str = "",
     sort_by: str = Query("latest", pattern="^(latest|match|score)$"),
+    recruiter: dict = Depends(_require_recruiter),
     db=Depends(get_db),
 ):
-    recruiter = get_user_or_404(db, recruiter_id)
-    if recruiter.role != "recruiter":
-        return {"error": "Only recruiters can access this"}
+    recruiter_id = recruiter["user_id"]
+    # Verify user exists in DB
 
     listings_query = db.query(models.JobListing).filter(models.JobListing.recruiter_id == recruiter_id)
     if listing_id:
@@ -265,7 +277,7 @@ def recruiter_applications(
                     resume.original_filename if resume and resume.original_filename else (resume.filename if resume else row.resume_filename_snapshot)
                 ),
                 "resume_deleted": bool(row.resume_deleted),
-                "resume_download_url": f"/recruiter/applications/{row.id}/resume?recruiter_id={recruiter_id}",
+                "resume_download_url": f"/recruiter/applications/{row.id}/resume",
                 "match": hybrid,
                 "rule_score": rule_score,
                 "vector_score": round(vector_score, 2),
@@ -332,19 +344,20 @@ def recommended_resume_for_job(job_id: int, user_id: int, db=Depends(get_db)):
 
 
 @router.patch("/applications/{application_id}/status", tags=["Applications"])
-def recruiter_update_application_status(application_id: int, recruiter_id: int, payload: ApplicationStatusUpdate, db=Depends(get_db)):
+def recruiter_update_application_status(application_id: int, payload: ApplicationStatusUpdate, recruiter: dict = Depends(_require_recruiter), db=Depends(get_db)):
+    recruiter_id = recruiter["user_id"]
     record = db.query(models.Application).filter(models.Application.id == application_id).first()
     if not record:
-        return {"error": "Application not found"}
+        raise HTTPException(status_code=404, detail="Application not found")
 
     listing = db.query(models.JobListing).filter(models.JobListing.id == record.job_listing_id).first()
     if not listing or listing.recruiter_id != recruiter_id:
-        return {"error": "Not authorized"}
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     allowed = {"reviewed", "shortlisted", "rejected", "applied", "saved", "withdrawn"}
     status = payload.status.strip().lower()
     if status not in allowed:
-        return {"error": f"Invalid status. Allowed: {sorted(allowed)}"}
+        raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {sorted(allowed)}")
 
     record.status = status
     record.last_status_updated_by = recruiter_id
@@ -362,14 +375,15 @@ def recruiter_update_application_status(application_id: int, recruiter_id: int, 
 
 
 @router.patch("/applications/{application_id}/note", tags=["Applications"])
-def recruiter_update_note(application_id: int, recruiter_id: int, payload: RecruiterNoteUpdate, db=Depends(get_db)):
+def recruiter_update_note(application_id: int, payload: RecruiterNoteUpdate, recruiter: dict = Depends(_require_recruiter), db=Depends(get_db)):
+    recruiter_id = recruiter["user_id"]
     record = db.query(models.Application).filter(models.Application.id == application_id).first()
     if not record:
-        return {"error": "Application not found"}
+        raise HTTPException(status_code=404, detail="Application not found")
 
     listing = db.query(models.JobListing).filter(models.JobListing.id == record.job_listing_id).first()
     if not listing or listing.recruiter_id != recruiter_id:
-        return {"error": "Not authorized"}
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     record.recruiter_note = (payload.recruiter_note or "").strip()[:1000]
     record.updated_at = datetime.utcnow()
@@ -379,17 +393,18 @@ def recruiter_update_note(application_id: int, recruiter_id: int, payload: Recru
 
 
 @router.get("/recruiter/applications/{application_id}/resume", tags=["Applications"])
-def recruiter_download_application_resume(application_id: int, recruiter_id: int, db=Depends(get_db)):
+def recruiter_download_application_resume(application_id: int, recruiter: dict = Depends(_require_recruiter), db=Depends(get_db)):
+    recruiter_id = recruiter["user_id"]
     record = db.query(models.Application).filter(models.Application.id == application_id).first()
     if not record:
-        return {"error": "Application not found"}
+        raise HTTPException(status_code=404, detail="Application not found")
 
     listing = db.query(models.JobListing).filter(models.JobListing.id == record.job_listing_id).first()
     if not listing or listing.recruiter_id != recruiter_id:
-        return {"error": "Not authorized"}
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     if not record.resume_id:
-        return {"error": "Resume file is unavailable for this application"}
+        raise HTTPException(status_code=404, detail="Resume file is unavailable for this application")
 
     resume = (
         db.query(models.Resume)
@@ -397,7 +412,7 @@ def recruiter_download_application_resume(application_id: int, recruiter_id: int
         .first()
     )
     if not resume or not resume.storage_path or not os.path.exists(resume.storage_path):
-        return {"error": "Resume file not found"}
+        raise HTTPException(status_code=404, detail="Resume file not found")
 
     filename = resume.original_filename or record.resume_filename_snapshot or "resume.pdf"
     return FileResponse(

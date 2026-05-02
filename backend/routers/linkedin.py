@@ -30,8 +30,11 @@ _REMOTE_FILTERS = {"on-site", "on site", "remote", "hybrid"}
 def _run_linkedin_search(params: dict) -> dict:
     """Spawn a Node.js subprocess to query LinkedIn. Returns parsed result dict."""
     try:
+        # Pass params via stdin rather than as a CLI argument to avoid any
+        # shell-injection surface from special characters in the JSON values.
         result = subprocess.run(
-            ["node", "search.js", json.dumps(params)],
+            ["node", "search.js"],
+            input=json.dumps(params),
             capture_output=True,
             text=True,
             timeout=30,

@@ -108,8 +108,12 @@ def compute_keyword_penalty(resume_text: str) -> dict:
     found = []
 
     for cat_id, cat in KEYWORD_CATEGORIES.items():
-        # Check if ANY keyword from this category exists in the resume
-        has_keyword = any(kw in lower_text for kw in cat["keywords"])
+        # Use word-boundary matching so short keywords like "ml", "ai", "sql"
+        # don't fire on partial matches inside longer words (e.g. "email" for "ml").
+        has_keyword = any(
+            re.search(r"\b" + re.escape(kw) + r"\b", lower_text)
+            for kw in cat["keywords"]
+        )
 
         if has_keyword:
             found.append({"category": cat_id, "label": cat["label"]})

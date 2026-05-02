@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from security import create_auth_token, hash_password, verify_password, verify_auth_token
 from schemas import RecruiterRegister, UserCreate, UserLogin
@@ -12,13 +12,14 @@ router = APIRouter()
 def register_user(user: UserCreate, db=Depends(get_db)):
     existing = db.query(models.UserDB).filter(models.UserDB.email == user.email).first()
     if existing:
-        return {"error": "Email already registered"}
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-    new_user = models.UserDB(name=user.name, email=user.email, password=hash_password(user.password), role=user.role)
+    # Always register as applicant regardless of what the client sends.
+    new_user = models.UserDB(name=user.name, email=user.email, password=hash_password(user.password), role="applicant")
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    log_audit(db, "user.register", actor_id=new_user.id, target_type="user", target_id=new_user.id, detail=f"role={new_user.role}")
+    log_audit(db, "user.register", actor_id=new_user.id, target_type="user", target_id=new_user.id, detail="role=applicant")
     return {"message": "User saved in database"}
 
 
@@ -26,7 +27,7 @@ def register_user(user: UserCreate, db=Depends(get_db)):
 def register_recruiter(data: RecruiterRegister, db=Depends(get_db)):
     existing = db.query(models.UserDB).filter(models.UserDB.email == data.email).first()
     if existing:
-        return {"error": "Email already registered"}
+        raise HTTPException(status_code=400, detail="Email already registered")
 
     new_user = models.UserDB(name=data.name, email=data.email, password=hash_password(data.password), role="recruiter")
     db.add(new_user)
@@ -49,13 +50,9 @@ def register_recruiter(data: RecruiterRegister, db=Depends(get_db)):
 def login(user: UserLogin, db=Depends(get_db)):
     existing_user = db.query(models.UserDB).filter(models.UserDB.email == user.email).first()
     if not existing_user:
-        return {"error": "User not found"}
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     if not verify_password(user.password, existing_user.password):
-        return {"error": "Incorrect password"}
-
-    if not str(existing_user.password).startswith("pbkdf2$"):
-        existing_user.password = hash_password(user.password)
-        db.commit()
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
     result = {
         "message": "Login successful",

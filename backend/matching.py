@@ -17,6 +17,12 @@ def normalize_app_status(action: str) -> str:
     return "applied"
 
 
+def _skill_match(job_skill: str, app_skills: list) -> bool:
+    """Return True if the job skill appears as a whole word in any applicant skill."""
+    pattern = re.compile(r"\b" + re.escape(job_skill) + r"\b", re.IGNORECASE)
+    return any(pattern.search(s) for s in app_skills)
+
+
 def compute_job_match(
     applicant_role: str,
     applicant_skills: list,
@@ -56,21 +62,21 @@ def compute_job_match(
     if job_skills_str:
         job_skills = [s.strip().lower() for s in job_skills_str.split(",") if s.strip()]
         if job_skills and applicant_skills:
-            app_skills_lower = [s.lower() for s in applicant_skills]
-            matched = sum(1 for js in job_skills if any(js in as_ or as_ in js for as_ in app_skills_lower))
+            # Use word-boundary matching to avoid "React" matching "Reactive", etc.
+            matched = sum(1 for js in job_skills if _skill_match(js, applicant_skills))
             skill_score = (matched / len(job_skills)) * 35
-    else:
-        skill_score = 15
+        # If job has skills listed but applicant has none, skill_score stays 0.
+    # If job lists no required skills: neutral — award 0 rather than an
+    # arbitrary free boost (previously 15 was given, inflating all scores).
     match_score += skill_score
 
     min_sc = job_min_score or 0
     score_val = applicant_score or 0
     if min_sc > 0:
-        if score_val >= min_sc:
-            ratio = min(score_val / min_sc, 1.5)
-            score_fit = 25 * min(ratio / 1.5, 1.0)
-        else:
-            score_fit = 25 * (score_val / min_sc) * 0.5
+        # Linear interpolation: full 25 pts when score_val >= min_sc,
+        # scaled down proportionally below.  No discontinuity at the boundary.
+        ratio = min(score_val / min_sc, 1.0)
+        score_fit = 25 * ratio
     else:
         score_fit = (score_val / 100) * 25
     match_score += score_fit

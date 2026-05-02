@@ -149,17 +149,25 @@ def seed_admin() -> None:
     try:
         admin = db.query(models.UserDB).filter(models.UserDB.email == "admin@preplace.smvdu").first()
         if not admin:
+            admin_password = os.getenv("ADMIN_PASSWORD")
+            if not admin_password:
+                import warnings
+                admin_password = "admin@123"
+                warnings.warn(
+                    "ADMIN_PASSWORD env var is not set. Using insecure default 'admin@123'. "
+                    "Set ADMIN_PASSWORD before deploying to production.",
+                    stacklevel=2,
+                )
             admin_user = models.UserDB(
                 name="PREPLACE Admin",
                 email="admin@preplace.smvdu",
-                password=hash_password("admin@123"),
+                password=hash_password(admin_password),
                 role="admin",
             )
             db.add(admin_user)
             db.commit()
-        elif not str(admin.password).startswith("pbkdf2$"):
-            admin.password = hash_password("admin@123")
-            db.commit()
+        # Never overwrite an existing admin password on startup — doing so would
+        # silently undo any operator password change.
     finally:
         db.close()
 
@@ -605,9 +613,12 @@ OPENAPI_TAGS = [
 
 app = FastAPI(lifespan=lifespan, openapi_tags=OPENAPI_TAGS)
 
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,0 +1,12 @@
+{
+	"servers": {
+		"my-mcp-server-7f6f5af9": {
+			"type": "stdio",
+			"command": "node",
+			"args": [
+				"C:\\Users\\USER\\Desktop\\PREPLACE\\PREPLACE\\linkedin-jobs-api\\mcp-server.js"
+			]
+		}
+	},
+	"inputs": []
+}

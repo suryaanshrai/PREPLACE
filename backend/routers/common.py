@@ -99,9 +99,23 @@ def get_resume_text_for_scoring(resume: models.Resume) -> str:
 
 
 def resolve_penalty_rules(db, recruiter_id: int | None = None, listing_id: int | None = None) -> list[dict]:
-    rows = []
+    def _serialize(rows):
+        return [
+            {
+                "category": r.category,
+                "label": r.label,
+                "keywords": [k.strip().lower() for k in (r.keywords or "").split(",") if k.strip()],
+                "penalty_value": int(r.penalty_value or 0),
+                "is_active": bool(r.is_active),
+            }
+            for r in rows
+        ]
 
     # Tier 1: listing-specific recruiter rules.
+    # If a listing_id was supplied, this tier is *authoritative* — if no rules
+    # exist for that listing we stop here (return empty) rather than falling
+    # through to recruiter defaults.  Falling through would silently apply
+    # rules the recruiter configured for *other* listings.
     if recruiter_id is not None and listing_id is not None:
         rows = (
             db.query(models.PenaltyRule)
@@ -109,17 +123,8 @@ def resolve_penalty_rules(db, recruiter_id: int | None = None, listing_id: int |
             .order_by(models.PenaltyRule.id.asc())
             .all()
         )
-        if rows:
-            return [
-                {
-                    "category": r.category,
-                    "label": r.label,
-                    "keywords": [k.strip().lower() for k in (r.keywords or "").split(",") if k.strip()],
-                    "penalty_value": int(r.penalty_value or 0),
-                    "is_active": bool(r.is_active),
-                }
-                for r in rows
-            ]
+        # Always return Tier 1 result (even if empty) when listing_id was given.
+        return _serialize(rows)
 
     # Tier 2: recruiter defaults (listing_id = null).
     if recruiter_id is not None:
@@ -130,16 +135,7 @@ def resolve_penalty_rules(db, recruiter_id: int | None = None, listing_id: int |
             .all()
         )
         if rows:
-            return [
-                {
-                    "category": r.category,
-                    "label": r.label,
-                    "keywords": [k.strip().lower() for k in (r.keywords or "").split(",") if k.strip()],
-                    "penalty_value": int(r.penalty_value or 0),
-                    "is_active": bool(r.is_active),
-                }
-                for r in rows
-            ]
+            return _serialize(rows)
 
     # Tier 3: admin global defaults.
     rows = (
@@ -148,16 +144,7 @@ def resolve_penalty_rules(db, recruiter_id: int | None = None, listing_id: int |
         .order_by(models.PenaltyRule.id.asc())
         .all()
     )
-    return [
-        {
-            "category": r.category,
-            "label": r.label,
-            "keywords": [k.strip().lower() for k in (r.keywords or "").split(",") if k.strip()],
-            "penalty_value": int(r.penalty_value or 0),
-            "is_active": bool(r.is_active),
-        }
-        for r in rows
-    ]
+    return _serialize(rows)
 
 
 def compute_penalty_from_rules(resume_text: str, rules: list[dict]) -> dict:
