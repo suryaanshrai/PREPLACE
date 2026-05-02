@@ -327,6 +327,7 @@ def evaluate_resume_for_job_with_db(db, resume: models.Resume, job: models.JobLi
     # When Chroma is unavailable, vector_score from the index is 0.
     # Fall back to PRECISE text similarity so scores are not capped by the
     # hybrid formula (max 0.45 × rule_score = 45).
+    used_precise_fallback = False
     if vector_score == 0:
         job_target = (
             f"Role: {job.role_title or ''}. "
@@ -334,6 +335,7 @@ def evaluate_resume_for_job_with_db(db, resume: models.Resume, job: models.JobLi
             f"Description: {job.description or ''}"
         )
         vector_score = float(vector_store.text_similarity_score(resume_text, job_target))
+        used_precise_fallback = True
 
     boost_total = int(penalty["boost_total"])
     structural = compute_structural_bonus(resume_text)
@@ -343,11 +345,22 @@ def evaluate_resume_for_job_with_db(db, resume: models.Resume, job: models.JobLi
         # Blend JD-text similarity with deterministic rule scoring to reduce
         # inflated matches caused by generic overlap in resume/JD text.
         blended = (0.55 * vector_score) + (0.45 * rule_score)
-        match = clamp_score(blended + boost_total + structural_bonus - penalty_total)
-        engine = "vector_rule_penalty_v3"
-        fallback_reason = None
+        # Bonuses can only fill remaining headroom to 100; they cannot push a
+        # mediocre score over the line by themselves.
+        headroom = max(0.0, 100.0 - blended)
+        bonus_applied = min(float(boost_total + structural_bonus), headroom)
+        raw_match = blended + bonus_applied - penalty_total
+        # When ChromaDB is not indexed (PRECISE fallback), cap at 90 — scores
+        # above 90 require real embedding similarity to be meaningful. Run
+        # POST /admin/reindex to populate ChromaDB and unlock full scoring.
+        score_ceiling = 90 if used_precise_fallback else 100
+        match = max(0, min(score_ceiling, int(round(raw_match))))
+        engine = "precise_fallback_v3" if used_precise_fallback else "vector_rule_penalty_v3"
+        fallback_reason = "chroma_not_indexed" if used_precise_fallback else None
     else:
-        match = clamp_score(fallback_hybrid + structural_bonus)
+        headroom = max(0.0, 100.0 - fallback_hybrid)
+        bonus_applied = min(float(structural_bonus), headroom)
+        match = clamp_score(fallback_hybrid + bonus_applied)
         engine = "fallback_hybrid"
         fallback_reason = "no_vector_score"
 

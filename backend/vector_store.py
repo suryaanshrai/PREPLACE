@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 from math import sqrt
 from typing import Dict, List
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -36,9 +39,13 @@ class VectorStore:
                 metadata={"hnsw:space": "cosine"},
             )
             self.enabled = True
-        except Exception:
+            logger.info("VectorStore: ChromaDB + sentence-transformers loaded successfully (model=%s)", EMBED_MODEL)
+            print(f"[VectorStore] Semantic embeddings ENABLED — model={EMBED_MODEL}")
+        except Exception as exc:
             self.enabled = False
             self._embedding_function = None
+            logger.warning("VectorStore: ChromaDB unavailable — falling back to PRECISE scorer only. Reason: %s", exc)
+            print(f"[VectorStore] Semantic embeddings DISABLED — PRECISE-only fallback active. Reason: {exc}")
 
     def upsert_job(self, job_id: int, content: str, metadata: Dict):
         if not self.enabled:
@@ -166,9 +173,25 @@ class VectorStore:
             resume_hits = {m for m in jd_hits
                            if re.search(r"\b" + re.escape(m) + r"\b", resume_lower)}
             if resume_hits:
-                # Partial credit: if JD lists many items in a group, resume must
-                # cover more than one to earn full group weight.
-                matched_weight += weight * (len(resume_hits) / len(jd_hits))
+                # Soft synonym coverage: cap denominator at 3 so that having
+                # 1-of-5 equivalent frameworks (e.g. fastapi from
+                # fastapi/django/flask/express/nestjs) earns 33% credit rather
+                # than 20%. This prevents narrow JDs from scoring higher than
+                # broad ones for the same skill hit.
+                effective_denom = min(len(jd_hits), 3)
+                group_weight = weight * min(1.0, len(resume_hits) / effective_denom)
+
+                # Education-context penalty (ai_ml only): when ALL matched ai_ml
+                # keywords appear exclusively near educational context words
+                # (coursera, certificate, course, etc.), reduce credit to 35%.
+                # This prevents a Coursera LangChain certificate from making the
+                # resume look like an ML Engineer's primary profile.
+                if _group == "ai_ml" and all(
+                    self._is_education_only(kw, resume_lower) for kw in resume_hits
+                ):
+                    group_weight *= 0.35
+
+                matched_weight += group_weight
 
         if relevant_weight > 0:
             skill_score = (matched_weight / relevant_weight) * 100.0
@@ -223,8 +246,11 @@ class VectorStore:
 
         # ── Combine and calibrate ────────────────────────────────────────────
         # Skill fit stays dominant for role discrimination.
+        # Cap at 90 (not 100) so the PRECISE-only fallback path (no ChromaDB)
+        # stays within real cosine similarity range and leaves headroom for
+        # structural/boost bonuses without inflating scores to 100.
         raw = 0.75 * skill_score + 0.12 * exp_score + 0.13 * role_score
-        calibrated = min(100.0, raw * 1.05)
+        calibrated = min(90.0, raw * 1.05)
         return round(calibrated, 2)
 
     def _infer_skill_score(self, role_raw: str, resume_lower: str, taxonomy: dict) -> float:
@@ -275,6 +301,30 @@ class VectorStore:
         if inferred_relevant == 0:
             return 50.0
         return (inferred_matched / inferred_relevant) * 100.0
+
+    def _is_education_only(self, keyword: str, resume_lower: str) -> bool:
+        """
+        Return True if every occurrence of `keyword` in the resume appears
+        within 300 characters of an educational context word (coursera, udemy,
+        edx, certificate, certification, course, degree, hackathon, intern).
+        Used to detect ML keywords that come from certifications rather than
+        primary work experience.
+        """
+        EDU_MARKERS = (
+            "coursera", "udemy", "edx", "certificate", "certification",
+            "course", "degree", "hackathon", "intern",
+        )
+        WINDOW = 300
+        pattern = re.compile(r"\b" + re.escape(keyword) + r"\b")
+        occurrences = [m.start() for m in pattern.finditer(resume_lower)]
+        if not occurrences:
+            return True  # No occurrence → treat as education-only (no real-world evidence)
+        for pos in occurrences:
+            ctx = resume_lower[max(0, pos - WINDOW): pos + len(keyword) + WINDOW]
+            if not any(marker in ctx for marker in EDU_MARKERS):
+                # This occurrence is NOT near any educational marker → real-world use
+                return False
+        return True
 
     def _cosine_from_vecs(self, emb_a, emb_b) -> float:
         """Cosine similarity in [0, 100] from two pre-computed embeddings."""

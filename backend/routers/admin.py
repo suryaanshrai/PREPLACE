@@ -7,7 +7,7 @@ from sqlalchemy import func
 import models
 from schemas import PenaltyRulesUpsert, ScoringTemplateCreate, ScoringTemplateUpdate
 from vector_store import vector_store
-from .common import get_db, log_audit, to_iso, upsert_job_vector
+from .common import get_db, log_audit, to_iso, upsert_job_vector, upsert_resume_vector
 
 router = APIRouter()
 
@@ -296,6 +296,30 @@ def admin_get_penalty_defaults(db=Depends(get_db)):
     if not rules:
         return {"rules": []}
     return {"rules": [_serialize_penalty_rule(rule) for rule in rules]}
+
+
+@router.post("/admin/reindex", tags=["Admin"])
+def admin_reindex_vectors(db=Depends(get_db)):
+    """Re-upsert all resumes and jobs into ChromaDB.
+
+    Run this after moving the app to a new machine where chroma_db/ is empty.
+    Without it, every resume falls back to the PRECISE-only scorer which is
+    more generous than real cosine similarity, inflating scores toward 100.
+    """
+    if not vector_store.enabled:
+        return {"error": "VectorStore is disabled — ChromaDB/sentence-transformers not available"}
+
+    resumes = db.query(models.Resume).all()
+    jobs = db.query(models.JobListing).all()
+
+    for resume in resumes:
+        upsert_resume_vector(db, resume)
+    for job in jobs:
+        upsert_job_vector(db, job)
+
+    log_audit(db, "admin.reindex", actor_id=1, target_type="vector_store",
+              detail=f"resumes={len(resumes)} jobs={len(jobs)}")
+    return {"message": "Re-index complete", "resumes_indexed": len(resumes), "jobs_indexed": len(jobs)}
 
 
 @router.put("/admin/penalty-defaults", tags=["Admin"])

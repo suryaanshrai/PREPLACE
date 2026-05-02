@@ -532,11 +532,61 @@ def seed_penalty_defaults() -> None:
         db.close()
 
 
+def migrate_ml_engineer_template() -> None:
+    """
+    Update the ML Engineer scoring template to use more discriminating language.
+    Moves Docker/AWS/GCP to 'Nice to Have' and adds MLflow/Kubeflow/DVC/feature
+    engineering to Requirements, so PRECISE can better distinguish ML engineers
+    from backend developers who've touched LLM tooling in a course.
+    Runs as a live-DB migration on every startup — idempotent via a sentinel phrase.
+    """
+    SENTINEL = "MLflow, Kubeflow, DVC"
+    NEW_DESCRIPTION = (
+        "**About the Role**\n\n"
+        "We are building intelligent systems and need an ML Engineer who can take models from research "
+        "to production. You'll work across the full ML lifecycle — data, training, evaluation, deployment, and monitoring.\n\n"
+        "**What You'll Do**\n\n"
+        "- Build, train, and deploy ML and deep learning models using Python, PyTorch, TensorFlow, and scikit-learn\n"
+        "- Design and execute feature engineering pipelines; apply dimensionality reduction and feature selection\n"
+        "- Implement and iterate on classification, regression, clustering, and anomaly detection algorithms\n"
+        "- Work with LLMs, RAG pipelines, and embeddings using LangChain, LlamaIndex, and HuggingFace Transformers\n"
+        "- Track experiments rigorously with MLflow or similar; manage model registry and reproducibility\n"
+        "- Apply NLP, computer vision, and generative AI techniques to real product problems\n"
+        "- Maintain MLOps infrastructure using Kubeflow or Airflow; version datasets and models with DVC\n\n"
+        "**Requirements**\n\n"
+        "- Strong Python skills with hands-on ML model development and experimentation experience\n"
+        "- Proficiency in PyTorch or TensorFlow and scikit-learn — you train, evaluate, and iterate models\n"
+        "- Solid understanding of ML fundamentals: bias/variance, cross-validation, evaluation metrics\n"
+        "- Experience with experiment tracking tools (MLflow, Weights & Biases, DVC)\n"
+        "- Familiarity with feature engineering, data preprocessing, and Pandas/NumPy\n"
+        "- Working knowledge of SQL for data querying and feature extraction\n\n"
+        "**Nice to Have**\n\n"
+        "- Deployment experience: containerising models with Docker, serving on AWS SageMaker or GCP Vertex AI\n"
+        "- Exposure to distributed training and Spark for large-scale data\n"
+        "- Experience with Kubeflow Pipelines or MLflow model serving\n"
+        "- Familiarity with vector databases (Pinecone, Weaviate, Chroma) for RAG architectures"
+    )
+    db = SessionLocal()
+    try:
+        tmpl = (
+            db.query(models.ScoringTemplate)
+            .filter(models.ScoringTemplate.role_title == "ML Engineer")
+            .first()
+        )
+        if tmpl is None or (tmpl.description or "").find(SENTINEL) != -1:
+            return  # Not found or already migrated
+        tmpl.description = NEW_DESCRIPTION
+        db.commit()
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     seed_admin()
     seed_scoring_defaults()
     seed_penalty_defaults()
+    migrate_ml_engineer_template()
     yield
 
 
